@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.BiteMelt" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">#FFC928</item>
+        <item name="android:statusBarColor">#FFC928</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>

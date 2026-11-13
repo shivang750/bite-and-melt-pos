@@ -1,0 +1,19 @@
+{
+  "name": "bite-and-melt-pos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BITE AND MELT cafe billing & POS (Node.js built-ins only, no npm dependencies)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --no-warnings server/server.js",
+    "test": "node tests/imports.js && node --no-warnings tests/api.js && node --no-warnings tests/payments.js",
+    "test:e2e": "node tests/e2e.cjs",
+    "backup": "node --no-warnings scripts/backup.js",
+    "restore": "node --no-warnings scripts/restore.js",
+    "reset-password": "node --no-warnings server/cli.js reset-password",
+    "import-images": "node --no-warnings scripts/import-images.js"
+  }
+}

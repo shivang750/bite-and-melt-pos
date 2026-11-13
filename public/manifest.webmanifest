@@ -1,0 +1,16 @@
+{
+  "name": "BITE AND MELT - Billing",
+  "short_name": "Bite & Melt",
+  "description": "Cafe billing and POS for BITE AND MELT, Navsari",
+  "start_url": "/#/bill",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#38b6f5",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

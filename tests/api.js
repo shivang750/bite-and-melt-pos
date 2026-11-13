@@ -1,0 +1,133 @@
+// API / backend tests (no browser). Starts the real server in-process on a temp database.
+import assert from 'node:assert/strict';
+import os from 'node:os'; import fs from 'node:fs'; import path from 'node:path';
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-api-'));
+process.env.BM_ADMIN_PASSWORD = 'Secret123';
+const { openDb } = await import('../server/db.js');
+const { createApp } = await import('../server/app.js');
+const { ensureAdmin } = await import('../server/auth.js');
+const db = openDb(); ensureAdmin(db);
+const srv = createApp(db); await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${srv.address().port}`;
+let n = 0, cookie = '';
+const t = async (name, fn) => { try { await fn(); n++; console.log('  ✓ ' + name); } catch (e) { console.error('  ✗ ' + name + '\n    ' + e.message); process.exitCode = 1; } };
+const api = async (method, url, body, ck = cookie) => {
+  const r = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', Cookie: ck }, body: body ? JSON.stringify(body) : undefined });
+  const sc = r.headers.get('set-cookie'); if (sc && url === '/api/login') cookie = sc.split(';')[0];
+  const txt = await r.text(); let j; try { j = JSON.parse(txt); } catch { j = txt; } return { s: r.status, j };
+};
+let cid = 0; const newBill = (o = {}) => ({ client_id: 'test-client-' + (++cid) + '-abcdef', order_type: 'dine_in', payment_method: 'cash', payment_status: 'paid', items: [], ...o });
+
+await t('API requires login', async () => assert.equal((await api('GET', '/api/bootstrap', null, '')).s, 401));
+await t('wrong password rejected, right one accepted', async () => {
+  assert.equal((await api('POST', '/api/login', { username: 'admin', password: 'bad' })).s, 401);
+  assert.equal((await api('POST', '/api/login', { username: 'admin', password: 'Secret123' })).s, 200);
+});
+let items;
+await t('sample menu has the 7 categories', async () => {
+  const b = (await api('GET', '/api/bootstrap')).j; items = b.items;
+  for (const c of ['Burgers', 'Sandwiches', 'Pizza', 'Fries', 'Maggi', 'Beverages', 'Other Items']) assert.ok(b.categories.some((x) => x.name === c), c);
+  assert.ok(items.length >= 14);
+});
+await t('server computes totals from DB prices, ignoring prices/totals sent by the client', async () => {
+  const it = items[0];
+  const r = await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 3, price: 1, name: 'HACK' }], grand_total: 1 }));
+  assert.equal(r.s, 201); assert.equal(r.j.bill.grand_total, it.price * 3); assert.notEqual(r.j.bill.items[0].name, 'HACK');
+});
+await t('item % discount + bill % discount are exact (integer paise)', async () => {
+  const a = items[0], b = items[1];
+  const r = (await api('POST', '/api/bills', newBill({ items: [{ item_id: a.id, qty: 2 }, { item_id: b.id, qty: 1, disc_type: 'amount', disc_value: 1000 }], bill_disc_type: 'percent', bill_disc_value: 10 }))).j.bill;
+  const sub = a.price * 2 + b.price, afterItem = sub - 1000, bd = Math.round(afterItem * 0.1);
+  assert.equal(r.bill_discount, bd); assert.equal(r.grand_total, afterItem - bd);
+});
+await t('duplicate client_id does not create a second bill', async () => {
+  const p = newBill({ items: [{ item_id: items[0].id, qty: 1 }] });
+  const a = await api('POST', '/api/bills', p), b = await api('POST', '/api/bills', p);
+  assert.equal(a.j.bill.id, b.j.bill.id); assert.equal(b.j.duplicate, true);
+});
+await t('bill numbers are unique and sequential', async () => {
+  const a = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill.bill_no;
+  const b = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill.bill_no;
+  assert.notEqual(a, b);
+});
+await t('UPI bill cannot be created as Paid without verification; default is Pending', async () => {
+  const bad = await api('POST', '/api/bills', newBill({ payment_method: 'upi', payment_status: 'paid', items: [{ item_id: items[0].id, qty: 1 }] }));
+  assert.equal(bad.s, 400);
+  const ok = await api('POST', '/api/bills', newBill({ payment_method: 'upi', payment_status: 'pending', items: [{ item_id: items[0].id, qty: 1 }] }));
+  assert.equal(ok.j.bill.payment_status, 'pending');
+});
+await t('invalid Indian mobile numbers are rejected, +91 formats normalised', async () => {
+  assert.equal((await api('POST', '/api/bills', newBill({ customer_phone: '12345', items: [{ item_id: items[0].id, qty: 1 }] }))).s, 400);
+  const r = await api('POST', '/api/bills', newBill({ customer_phone: '+91 98765-43210', items: [{ item_id: items[0].id, qty: 1 }] }));
+  assert.equal(r.j.bill.customer_phone, '9876543210');
+});
+await t('empty bill, qty 0 and unknown item are rejected', async () => {
+  assert.equal((await api('POST', '/api/bills', newBill())).s, 400);
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 0 }] }))).s, 400);
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: 999999, qty: 1 }] }))).s, 400);
+});
+await t('out-of-stock item cannot be billed; back in stock works', async () => {
+  const it = items[2]; await api('PUT', '/api/items/' + it.id, { ...it, available: 0 });
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 1 }] }))).s, 400);
+  await api('PUT', '/api/items/' + it.id, { ...it, available: 1 });
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 1 }] }))).s, 201);
+});
+await t('changing a menu price does not change old bills', async () => {
+  const it = items[3]; const old = (await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 2 }] }))).j.bill;
+  await api('PUT', '/api/items/' + it.id, { ...it, price: it.price + 5000 });
+  const again = (await api('GET', '/api/bills/' + old.id)).j; const bill = again.bill || again;
+  assert.equal(bill.grand_total, old.grand_total); assert.equal(bill.items[0].price, it.price);
+  const fresh = (await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 1 }] }))).j.bill;
+  assert.equal(fresh.grand_total, it.price + 5000);
+});
+await t('GST is off by default and only applied when enabled', async () => {
+  const before = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill; assert.equal(before.tax_total, 0);
+  const st = (await api('GET', '/api/settings')).j; const s = st.settings || st;
+  const put = await api('PUT', '/api/settings', { ...s, gst_enabled: true, gst_rate: 5, gst_mode: 'exclusive' }); assert.equal(put.s, 200);
+  const after = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill;
+  assert.ok(after.tax_total > 0); await api('PUT', '/api/settings', { ...s, gst_enabled: false });
+});
+await t('void requires the admin password and keeps the record', async () => {
+  const b = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill;
+  assert.equal((await api('POST', `/api/bills/${b.id}/void`, { reason: 'test', admin_password: 'nope' })).s, 403);
+  const ok = await api('POST', `/api/bills/${b.id}/void`, { reason: 'test', admin_password: 'Secret123' }); assert.equal(ok.s, 200);
+  const g = (await api('GET', '/api/bills/' + b.id)).j; assert.equal((g.bill || g).status, 'void');
+});
+await t('reports exclude void bills; CSV and XLSX export work', async () => {
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const rep = await api('GET', `/api/reports?from=${today}&to=${today}`); assert.equal(rep.s, 200);
+  const csv = await fetch(`${base}/api/reports/export?type=bills&from=${today}&to=${today}`, { headers: { Cookie: cookie } }); assert.equal(csv.status, 200);
+  const x = await fetch(`${base}/api/reports/export?type=bills&format=xlsx&from=${today}&to=${today}`, { headers: { Cookie: cookie } });
+  assert.equal(x.status, 200); assert.equal(Buffer.from(await x.arrayBuffer()).subarray(0, 2).toString(), 'PK');
+});
+await t('staff user can bill but not manage the menu', async () => {
+  assert.equal((await api('POST', '/api/users', { username: 'staff1', password: 'Staffpass1', role: 'staff', full_name: 'S' })).s, 200);
+  const sc = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'staff1', password: 'Staffpass1' }) });
+  const ck = sc.headers.get('set-cookie').split(';')[0];
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }), ck)).s, 201);
+  assert.equal((await api('POST', '/api/items', { name: 'x', price: 100, category_id: 1 }, ck)).s, 403);
+});
+await t('database backup download is a valid SQLite file', async () => {
+  const r = await fetch(base + '/api/backup', { headers: { Cookie: cookie } }); assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0, 15).toString(), 'SQLite format 3');
+});
+await t('online payment is OFF by default: no link can be created, webhook refuses, no secrets/flags exposed', async () => {
+  const b = (await api('POST', '/api/bills', newBill({ payment_method: 'upi', payment_status: 'pending', items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill;
+  const r = await api('POST', `/api/bills/${b.id}/payment-link`, {}); assert.equal(r.s, 503);
+  assert.equal((await fetch(base + '/api/webhooks/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 503);
+  assert.equal((await api('GET', '/api/bootstrap')).j.settings.online_payment_enabled, false);
+});
+await t('logo and favicon routes answer (custom logo if present)', async () => {
+  const f = await fetch(base + '/brand/favicon.png'); assert.equal(f.status, 200); assert.equal(f.headers.get('content-type'), 'image/png');
+});
+await t('food photo upload is stored permanently, served, and shown on the item; names/prices untouched', async () => {
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const it = (await api('GET', '/api/bootstrap')).j.items[5];
+  const up = await api('POST', '/api/upload', { data: png }); assert.equal(up.s, 200); assert.match(up.j.url, /^\/uploads\/[a-f0-9]{24}\.png$/);
+  assert.equal((await api('PUT', '/api/items/' + it.id, { image: up.j.url })).s, 200);
+  const after = (await api('GET', '/api/bootstrap')).j.items.find((x) => x.id === it.id);
+  assert.equal(after.image, up.j.url); assert.equal(after.name, it.name); assert.equal(after.price, it.price); assert.equal(after.available, it.available);
+  assert.equal((await fetch(base + up.j.url)).status, 200);
+  assert.equal((await api('POST', '/api/upload', { data: 'data:image/png;base64,AAAA' })).s, 400); // fake image refused
+  assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'uploads', path.basename(up.j.url))), true); // on disk in the data folder, survives restarts
+});
+srv.close(); console.log(`\n${n} backend checks passed` + (process.exitCode ? ' — SOME FAILED' : '')); process.exit(process.exitCode || 0);

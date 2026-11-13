@@ -1,0 +1,9 @@
+# Change log (upgrade of the existing POS)
+
+Backups taken first (in `/home/claude/backups/`): database copy, full data folder, and a code archive. No existing table was altered; new tables are only *added*.
+
+1. **Logo**: your uploaded logo is `public/brand/logo.png` (unmodified) and is used on the login screen, header (which sits over the sidebar on desktop), dashboard and as the browser/home-screen icon (`public/brand/favicon.png` = the same logo centred on a white 512×512 square, because favicons must be square; the logo itself is not cropped or stretched). Replace the file to change the logo; or upload one in Settings (that one takes priority). Receipts still print the built-in black-and-white mark unless you upload a logo in Settings.
+2. **Food photos**: clean placeholder (fork-and-knife on soft colour) for items without photos; photo + name + price grid on New Bill; in Menu Management tap any thumbnail (or Edit → Food photo) to take/choose a photo from phone or computer. Photos are saved in `data/uploads/` (permanent, included in the folder you back up). Bulk helper: `npm run import-images -- /folder` matches files named like the items ("Veg Burger.jpg"). **No sample photos were added**: I cannot generate or invent food photos, so every item shows the placeholder until you upload real ones.
+3. **WhatsApp bill**: UPI ID removed; "Pay Now" link + Order No + Payment Ref added when online payment is configured (see PAYMENT_SETUP.md). Server: new routes `POST /api/bills/:id/payment-link`, `POST /api/bills/:id/payment-link/check`, `POST /api/webhooks/payments`; new tables `payment_links`, `webhook_events`; new file `server/payments.js`.
+4. **Mobile**: touch targets raised to 44 px, desktop New Bill cart no longer clipped on 1280 px screens.
+5. **Tests**: `npm test` (API + payments, 35 checks), `npm run test:e2e` (37), `node tests/e2e-payment.cjs` (4).
