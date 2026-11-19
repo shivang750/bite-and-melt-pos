@@ -17,3 +17,4 @@ Backups taken first (in `/home/claude/backups/`): database copy, full data folde
 * The cafe's real menu, phone number and UPI ID are built into the code (`server/db.js`), so a fresh/reset database (free Render restart) starts with them instead of sample data.
 * Settings > Backup & data: "Restore from backup (.db)" brings back menu, bills and settings from a downloaded backup. Staff accounts are not touched.
 * New Bill: category buttons (Burger, Sandwich, Pizza, ...) wrap so all are visible; the first category opens by default and shows only its own items; "All" is the last button; searching looks across every category.
+* Menu: new category "Cold Drinks" (Fanta, Sprite, Coke, Thums Up, Maaza, Sosyo, Diet Coke, Clear Water).

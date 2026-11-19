@@ -102,7 +102,7 @@ function seed(db) {
   };
   // The cafe's real menu (prices in rupees). Re-created automatically whenever the database is empty (e.g. a free Render restart).
   const REAL = {
-    cats: ['Burger', 'Sandwich', 'Pizza', 'Fries', 'Maggi', 'Cold Coffee', 'Garlic Bread'],
+    cats: ['Burger', 'Sandwich', 'Pizza', 'Fries', 'Maggi', 'Cold Coffee', 'Cold Drinks', 'Garlic Bread'],
     items: {
       Burger: [['Bite and Melt Sp. Burger', 30], ['Bite and Melt Sp. Burger (Cheese)', 45], ['Veg. Burger', 30], ['Veg. Burger (Cheese)', 45]],
       Sandwich: [['Bread Butter', 30], ['Bread Butter Jam', 35], ['Veg. Sandwich', 40], ['Cheese Chutney Sandwich', 50], ['Corn Cheese Sandwich', 60],
@@ -111,6 +111,7 @@ function seed(db) {
       Fries: [['Salted Fries', 50], ['Peri Peri Fries', 60], ['Cheese Fries', 70]],
       Maggi: [['Masala Maggi', 40], ['Veg. Maggi', 50], ['Veg. Cheese Maggi', 70]],
       'Cold Coffee': [['Cold Coffee', 30], ['Hazlnut Cold Coffee', 40], ['Caramel Cold Coffee', 40], ['Chocolate Cold Coffee', 40]],
+      'Cold Drinks': [['Fanta 250ml', 20], ['Sprite 250ml', 20], ['Coke 250ml', 20], ['Thums Up 250ml', 20], ['Maaza 250ml', 20], ['Sosyo 250ml', 20], ['Sosyo 150ml', 10], ['Diet Coke 330ml', 50], ['Clear Water 500ml', 10]],
       'Garlic Bread': [['Garlic Bread', 50]],
     },
   };
