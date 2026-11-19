@@ -10,7 +10,7 @@ let srv, browser, page0;
 const ok = (name) => { results.push(name); console.log('  ✓ ' + name); };
 
 (async () => {
-  srv = spawn('node', ['--no-warnings', path.join(__dirname, '..', 'server', 'server.js')], { env: { ...process.env, PORT, DATA_DIR: DATA, BM_ADMIN_PASSWORD: 'Secret123' }, stdio: 'ignore' });
+  srv = spawn('node', ['--no-warnings', path.join(__dirname, '..', 'server', 'server.js')], { env: { ...process.env, PORT, DATA_DIR: DATA, BM_ADMIN_PASSWORD: 'Secret123', BM_SEED: 'sample' }, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500));
   browser = await chromium.launch();
   const ctx = await browser.newContext({ ...devices['Pixel 7'], permissions: [] });
@@ -62,7 +62,7 @@ const ok = (name) => { results.push(name); console.log('  ✓ ' + name); };
   assert.match(await page.locator('.item', { hasText: 'Veg Burger' }).first().innerText(), /₹70/); ok('new bill shows updated price ₹70');
 
   // ---- build bill: 2 burgers + 1 cold coffee, change quantities
-  const tap = (name) => page.locator('.item', { hasText: name }).first().click();
+  const tap = async (name) => { await page.locator('.nb-main .chip', { hasText: /^All$/ }).click(); await page.locator('.item', { hasText: name }).first().click(); };
   await tap('Veg Burger'); await tap('Veg Burger'); await tap('Veg Burger'); await tap('Cold Coffee');
   await page.click('.cartbar'); await page.waitForTimeout(350);
   await page.locator('.cl', { hasText: 'Veg Burger' }).locator('[aria-label=Decrease]').click(); // 3 -> 2
@@ -116,15 +116,25 @@ const ok = (name) => { results.push(name); console.log('  ✓ ' + name); };
   assert.ok(longest <= 32 + 3, 'wrap ' + longest); ok('receipt text wraps within 58mm (32 chars)');
 
   // ---- WhatsApp
-  const phoneInput = page.locator('.wa-row input'); await phoneInput.fill('12345'); await page.click('text=Open WhatsApp');
+  const phoneInput = page.locator('.wa-row input'); await phoneInput.fill('12345'); await page.waitForTimeout(1200); await page.click('text=Send receipt image');
   assert.match(await page.locator('.wa-box .err').innerText(), /valid 10-digit/); ok('WhatsApp rejects invalid Indian mobile');
   await phoneInput.fill('+91 98765-43210');
-  const [popup] = await Promise.all([ctx.waitForEvent('page', { timeout: 5000 }), page.click('text=Open WhatsApp')]);
+  const [popup] = await Promise.all([ctx.waitForEvent('page', { timeout: 5000 }), page.click('text=Send as text')]);
   const wa = popup.url().startsWith('https://wa.me/') ? popup.url() : await popup.evaluate(() => location.href).catch(() => popup.url());
   await popup.close().catch(() => {});
   assert.ok(wa.startsWith('https://wa.me/919876543210?text='), wa); const msg = decodeURIComponent(wa.split('text=')[1]);
   assert.ok(msg.includes('BITE AND MELT') && msg.includes(billNo) && msg.includes('Total: ₹189') && msg.includes('PENDING') && msg.includes('Veg Burger'));
   assert.match(await page.locator('.wa-box').innerText(), /cannot see whether it was delivered/); ok('WhatsApp click-to-chat URL pre-filled (name, bill no, items, total, status); no delivery claim');
+
+  // ---- WhatsApp receipt IMAGE (phone path: system share sheet with a PNG file; stubbed here because headless Chromium has no share sheet)
+  await page.evaluate(() => { window.__shared = null; navigator.canShare = () => true; navigator.share = async (d) => { window.__shared = { n: d.files[0].name, t: d.files[0].type, sz: d.files[0].size, text: d.text, buf: await d.files[0].arrayBuffer() }; }; });
+  await page.click('text=Send receipt image'); await page.waitForTimeout(500);
+  const sh = await page.evaluate(() => { const s = window.__shared; if (!s) return null; const v = new DataView(s.buf); return { n: s.n, t: s.t, sz: s.sz, text: s.text, sig: v.getUint32(0), w: v.getUint32(16), h: v.getUint32(20) }; });
+  assert.ok(sh, 'share sheet was not opened'); assert.equal(sh.t, 'image/png'); assert.equal(sh.n, `Bill-${billNo}.png`); assert.equal(sh.sig, 0x89504e47); assert.equal(sh.w, 768); assert.ok(sh.h > 800 && sh.sz > 10000, `png ${sh.w}x${sh.h} ${sh.sz}`);
+  assert.ok(sh.text.includes(billNo) && sh.text.includes('Total: ₹189') && sh.text.includes('PENDING') && !sh.text.includes('Veg Burger'));
+  assert.match(await page.locator('.wa-box').innerText(), /Share sheet opened.*cannot see whether it was delivered/s); ok(`WhatsApp receipt image: ${sh.w}x${sh.h} PNG passed to the share sheet with a short caption; no delivery claim`);
+  // an invalid number is still refused for the image flow
+  await phoneInput.fill('12345'); await page.click('text=Send receipt image'); assert.match(await page.locator('.wa-box .err').innerText(), /valid 10-digit/); await phoneInput.fill('+91 98765-43210'); ok('image flow validates the Indian mobile number');
 
   // ---- mark paid
   await page.click('text=Mark as Paid (I verified it)'); await page.click('.modal-actions >> text=Mark Paid'); await waitIdle();

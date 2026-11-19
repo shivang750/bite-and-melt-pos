@@ -64,8 +64,8 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 export const DEFAULT_SETTINGS = {
   cafe_name: 'BITE AND MELT',
   address: 'Shop No. 6, Sugam Apartment, Opposite Agriculture Gate No. 1, Eru Road, Navsari, Gujarat',
-  phone: '', logo: '', print_logo: '1', footer: 'Big Taste. Better Price.',
-  currency: '₹', upi_id: '', payee_name: 'BITE AND MELT', upi_ref: '',
+  phone: '9978463006', logo: '', print_logo: '1', footer: 'Big Taste. Better Price.',
+  currency: '₹', upi_id: 'gpay-12207298509@okbizaxis', payee_name: 'BITE AND MELT', upi_ref: '',
   gst_enabled: '0', gst_rate: '5', gst_mode: 'exclusive', gst_number: '', round_off: '0',
   bill_format: 'BM-{YYMMDD}-{SEQ4}', printer: '{}',
 };
@@ -88,17 +88,34 @@ function seed(db) {
   const hasCats = db.prepare('SELECT COUNT(*) c FROM categories').get().c;
   const seeded = db.prepare("SELECT value FROM settings WHERE key='seeded'").get();
   if (hasCats || seeded) return;
-  const cats = ['Burgers', 'Sandwiches', 'Pizza', 'Fries', 'Maggi', 'Beverages', 'Other Items'];
-  // SAMPLE items & prices (in rupees) - all editable/deletable by admin
-  const items = {
-    Burgers: [['Veg Burger', 60], ['Cheese Burger', 80], ['Paneer Burger', 110], ['Double Patty Burger', 130]],
-    Sandwiches: [['Veg Grilled Sandwich', 70], ['Cheese Grilled Sandwich', 90], ['Paneer Tikka Sandwich', 120]],
-    Pizza: [['Margherita Pizza', 120], ['Veg Loaded Pizza', 180], ['Paneer Tikka Pizza', 220]],
-    Fries: [['Salted Fries', 60], ['Peri Peri Fries', 80], ['Cheese Fries', 100]],
-    Maggi: [['Plain Maggi', 50], ['Veg Masala Maggi', 70], ['Cheese Maggi', 90]],
-    Beverages: [['Cold Coffee', 80], ['Masala Chai', 20], ['Fresh Lime Soda', 40], ['Chocolate Shake', 100]],
-    'Other Items': [['Garlic Bread', 90], ['Brownie', 70], ['Water Bottle', 20]],
+  const SAMPLE = {
+    cats: ['Burgers', 'Sandwiches', 'Pizza', 'Fries', 'Maggi', 'Beverages', 'Other Items'],
+    items: {
+      Burgers: [['Veg Burger', 60], ['Cheese Burger', 80], ['Paneer Burger', 110], ['Double Patty Burger', 130]],
+      Sandwiches: [['Veg Grilled Sandwich', 70], ['Cheese Grilled Sandwich', 90], ['Paneer Tikka Sandwich', 120]],
+      Pizza: [['Margherita Pizza', 120], ['Veg Loaded Pizza', 180], ['Paneer Tikka Pizza', 220]],
+      Fries: [['Salted Fries', 60], ['Peri Peri Fries', 80], ['Cheese Fries', 100]],
+      Maggi: [['Plain Maggi', 50], ['Veg Masala Maggi', 70], ['Cheese Maggi', 90]],
+      Beverages: [['Cold Coffee', 80], ['Masala Chai', 20], ['Fresh Lime Soda', 40], ['Chocolate Shake', 100]],
+      'Other Items': [['Garlic Bread', 90], ['Brownie', 70], ['Water Bottle', 20]],
+    },
   };
+  // The cafe's real menu (prices in rupees). Re-created automatically whenever the database is empty (e.g. a free Render restart).
+  const REAL = {
+    cats: ['Burger', 'Sandwich', 'Pizza', 'Fries', 'Maggi', 'Cold Coffee', 'Garlic Bread'],
+    items: {
+      Burger: [['Bite and Melt Sp. Burger', 30], ['Bite and Melt Sp. Burger (Cheese)', 45], ['Veg. Burger', 30], ['Veg. Burger (Cheese)', 45]],
+      Sandwich: [['Bread Butter', 30], ['Bread Butter Jam', 35], ['Veg. Sandwich', 40], ['Cheese Chutney Sandwich', 50], ['Corn Cheese Sandwich', 60],
+        ['Veg. Cheese Grill', 60], ['Aloo Cheese Chutney', 60], ['Paneer Makhani', 60], ['Cheese Chilli Sandwich', 60], ['Bite & Melt Sp. Sandwich', 70], ['Paneer Makhani Cheese', 80]],
+      Pizza: [['Capsi-Crunch Pizza', 129], ['Spicy Peri Veg. Pizza', 139], ['Veg Carnival Pizza', 149], ['Signature Cheese Pizza', 149], ['Tandoori Paneer Pizza', 159]],
+      Fries: [['Salted Fries', 50], ['Peri Peri Fries', 60], ['Cheese Fries', 70]],
+      Maggi: [['Masala Maggi', 40], ['Veg. Maggi', 50], ['Veg. Cheese Maggi', 70]],
+      'Cold Coffee': [['Cold Coffee', 30], ['Hazlnut Cold Coffee', 40], ['Caramel Cold Coffee', 40], ['Chocolate Cold Coffee', 40]],
+      'Garlic Bread': [['Garlic Bread', 50]],
+    },
+  };
+  // BM_SEED=sample is used only by the automated tests (they were written against these sample prices).
+  const { cats, items } = process.env.BM_SEED === 'sample' ? SAMPLE : REAL;
   db.exec('BEGIN');
   cats.forEach((c, i) => {
     const id = db.prepare('INSERT INTO categories(name,sort_order) VALUES(?,?)').run(c, i + 1).lastInsertRowid;

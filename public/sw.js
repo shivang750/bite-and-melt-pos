@@ -1,5 +1,5 @@
 // Offline shell: the app opens without internet. API calls are never cached (the app keeps its own offline queue).
-const VERSION = 'bm-v4';
+const VERSION = 'bm-v7';
 const SHELL = ['/', '/index.html', '/css/app.css', '/manifest.webmanifest', '/js/app.js', '/js/api.js', '/js/store.js', '/js/ui.js', '/js/calc.js', '/js/qr.js', '/js/receipt.js', '/js/escpos.js', '/js/pdf.js', '/js/logo.js', '/js/printer.js', '/js/share.js',
   '/js/views/login.js', '/js/views/dashboard.js', '/js/views/newbill.js', '/js/views/billview.js', '/js/views/menu.js', '/js/views/history.js', '/js/views/reports.js', '/js/views/settings.js', '/icons/icon-192.png', '/icons/icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });

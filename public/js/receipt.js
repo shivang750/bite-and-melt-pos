@@ -45,6 +45,8 @@ export function upiPayload(bill, s) {
   });
 }
 export const needsQr = (bill, s) => bill.payment_method === 'upi' && bill.payment_status !== 'paid' && bill.status !== 'void' && !!s.upi_id;
+/** Printed / shared receipt: a UPI QR for the exact bill total on EVERY bill (any payment method), if a UPI ID is set and the total is above zero. */
+export const receiptQr = (bill, s) => bill.status !== 'void' && !!s.upi_id && bill.grand_total > 0;
 
 /**
  * Returns array of entries:
@@ -89,9 +91,9 @@ export function buildReceipt(bill, s, cols = 32) {
   dbl();
   text(lr('Payment:', PAY_LABEL[bill.payment_method] || bill.payment_method, cols));
   text(lr('Status:', bill.payment_status === 'paid' ? 'PAID' : 'PENDING', cols), { bold: true });
-  if (needsQr(bill, s)) {
+  if (receiptQr(bill, s)) {
     dash();
-    center('Scan & pay with any UPI app', { bold: true });
+    center(bill.payment_status === 'paid' ? 'UPI QR for this bill' : 'Scan & pay with any UPI app', { bold: true });
     L.push({ t: 'qr', data: upiPayload(bill, s) });
     center('Rs. ' + plain(bill.grand_total), { bold: true });
     center('UPI: ' + s.upi_id);

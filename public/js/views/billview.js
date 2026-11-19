@@ -6,7 +6,7 @@ import { LOGO_COLOR, svgDataUrl } from '../logo.js';
 import { state } from '../store.js';
 import { post } from '../api.js';
 import { printBill } from '../printer.js';
-import { openWhatsApp, sharePdf } from '../share.js';
+import { openWhatsApp, sharePdf, prepareReceiptImage, shareReceiptImage } from '../share.js';
 
 export const statusBadge = (b) => b.status === 'void' ? badge('Cancelled', 'bad') : b.payment_status === 'paid' ? badge('Paid', 'good') : badge('Pending', 'warn');
 
@@ -26,6 +26,13 @@ export function showBill(initial, opts = {}) {
   let phoneVal = initial.customer_phone || '', linkBusy = false, linkErr = '', linkTried = false;
   const needsLink = () => !!s.online_payment_enabled && !!bill.id && !bill.local && bill.status !== 'void' && bill.payment_status !== 'paid';
   const linkLive = () => bill.payment_link && bill.payment_link.url && ['created', 'partial'].includes(bill.payment_link.status);
+  // WhatsApp receipt image: rendered ahead of the tap (and again if the bill's status changes)
+  let waImg = null, waImgKey = '', waImgErr = '';
+  function prepImage() {
+    const key = [bill.id, bill.status, bill.payment_status, bill.payment_method, bill.payment_link && bill.payment_link.url].join('|');
+    if (key === waImgKey) return; waImgKey = key; waImg = null; waImgErr = '';
+    prepareReceiptImage(bill, s).then((r) => { if (key === waImgKey) waImg = r; }).catch((e) => { if (key === waImgKey) waImgErr = e.message || 'image failed'; });
+  }
   async function ensureLink() {
     if (!needsLink() || linkLive() || linkBusy) return;
     linkTried = true; linkBusy = true; linkErr = ''; render();
@@ -85,6 +92,7 @@ export function showBill(initial, opts = {}) {
         h('pre', null, lines.map((l) => { const pad = l.align === 'center' ? ' '.repeat(Math.max(0, Math.floor((32 - l.text.length) / 2))) : ''; return h(l.bold ? 'b' : 'span', null, pad + l.text + '\n'); })))));
 
     // WhatsApp
+    prepImage();
     const phone = h('input', { type: 'tel', inputmode: 'numeric', autocomplete: 'off', placeholder: '10-digit mobile e.g. 98765 43210', value: phoneVal, maxlength: 17, oninput: (e) => { phoneVal = e.target.value; } });
     const err = h('div', { class: 'err small' });
     const note = h('div', { class: 'muted small' });
@@ -95,14 +103,27 @@ export function showBill(initial, opts = {}) {
         if (!linkTried) { ensureLink(); toast('Preparing the payment link… tap WhatsApp again in a moment', 'info'); return; }
         if (!confirm('The online payment link could not be created. Send the bill on WhatsApp without a Pay Now link?')) return;
       }
-      try { openWhatsApp(bill, s, phone.value); note.textContent = 'WhatsApp was opened with the message ready. Press Send inside WhatsApp - we cannot see whether it was delivered.'; }
+      if (waImgErr) { if (!confirm('The receipt image could not be created. Send the bill as text instead?')) return; sendText(); return; }
+      if (!waImg) { toast('Preparing the receipt image… tap again in a moment', 'info'); return; }
+      try {
+        const r = shareReceiptImage(bill, s, phone.value, waImg);
+        Promise.resolve(r).then((res) => {
+          note.textContent = res === 'copied' ? 'Receipt image copied and the chat opened. Click in the WhatsApp message box, press Ctrl+V, then Send. We cannot see whether it was delivered.'
+            : res === 'downloaded' ? 'Receipt image saved to your downloads and the chat opened. Attach the image in WhatsApp, then Send. We cannot see whether it was delivered.'
+            : res === 'cancelled' ? 'Sharing was cancelled.' : 'Share sheet opened: choose WhatsApp and the chat for the number above, then press Send. We cannot see whether it was delivered.';
+        }).catch((e) => { err.textContent = e.message; });
+      } catch (e) { err.textContent = e.message; phone.focus(); }
+    };
+    const sendText = () => {
+      err.textContent = '';
+      try { openWhatsApp(bill, s, phone.value); note.textContent = 'WhatsApp was opened with the text message ready. Press Send inside WhatsApp - we cannot see whether it was delivered.'; }
       catch (e) { err.textContent = e.message; phone.focus(); }
     };
     body.append(h('div', { class: 'wa-box' },
       h('div', { class: 'lbl' }, 'Send on WhatsApp'),
-      h('div', { class: 'wa-row' }, phone, btn('Open WhatsApp', { cls: 'wa', ic: 'wa', onclick: wa })),
+      h('div', { class: 'wa-row' }, phone, btn('Send receipt image', { cls: 'wa', ic: 'wa', onclick: wa })),
       err,
-      h('div', { class: 'actions-row' }, btn('Share PDF', { cls: 'ghost', ic: 'share', onclick: async () => {
+      h('div', { class: 'actions-row' }, btn('Send as text', { cls: 'ghost', ic: 'wa', onclick: sendText }), btn('Share PDF', { cls: 'ghost', ic: 'share', onclick: async () => {
         try { const r = await sharePdf(bill, s); if (r === 'downloaded') toast('PDF saved to your downloads. Attach it in WhatsApp.', 'info'); else if (r === 'shared') toast('Share sheet opened - choose WhatsApp.', 'info'); }
         catch (e) { toast('Could not create PDF: ' + e.message, 'error'); } } })),
       note));

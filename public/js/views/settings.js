@@ -1,6 +1,6 @@
 import { h, icon, btn, modal, toast, field, segmented, resizeImage, confirmDialog, badge, downloadBlob } from '../ui.js';
 import { inr, renderBillNo, isValidVpa, parseRupees } from '../calc.js';
-import { get, post, put, del } from '../api.js';
+import { api, get, post, put, del } from '../api.js';
 import { state, ls, savePrinterPrefs, printerPrefs, refreshMenu, clearLocalSession } from '../store.js';
 import { hasNative, hasWebBluetooth, isAndroid, nativePrinters, blePair, testPrint, resolveTransport } from '../printer.js';
 import { qrSvg, upiUri } from '../qr.js';
@@ -119,7 +119,23 @@ export function mount(root, go) {
 
   // ---- backup
   card('Backup & data', h('p', { class: 'muted' }, 'Your data lives on the server in one database file. The server also keeps automatic daily backups (last 30). Download a copy regularly and keep it somewhere safe (Google Drive, email to yourself).'),
-    h('a', { class: 'btn ghost', href: '/api/backup', download: '' }, icon('download', 20), h('span', null, 'Download full backup (.db)')));
+    h('a', { class: 'btn ghost', href: '/api/backup', download: '' }, icon('download', 20), h('span', null, 'Download full backup (.db)')),
+    h('p', { class: 'muted' }, 'If the server was reset and bills or prices went missing, choose your latest backup file here to bring them back. Staff accounts are not changed.'),
+    (() => {
+      const file = h('input', { type: 'file', accept: '.db,application/octet-stream', style: 'display:none' });
+      file.addEventListener('change', async () => {
+        const f = file.files && file.files[0]; file.value = '';
+        if (!f) return;
+        if (!(await confirmDialog(`Restore from “${f.name}”?\nThis replaces the current menu, bills and settings with the ones in the backup. A safety copy of the current data is kept on the server.`, { danger: true, okText: 'Restore', title: 'Restore backup' }))) return;
+        try {
+          const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(new Error('Could not read the file')); r.readAsDataURL(f); });
+          const out = await api('POST', '/api/restore', { data }, { timeout: 120000 });
+          toast(`Restored: ${out.bills} bills, ${out.items} menu items. Reloading…`, 'ok');
+          setTimeout(() => location.reload(), 1200);
+        } catch (e) { toast(e.message, 'error'); }
+      });
+      return h('div', null, file, btn('Restore from backup (.db)', { cls: 'ghost', ic: 'upload', onclick: () => file.click() }));
+    })());
   return () => {};
 }
 

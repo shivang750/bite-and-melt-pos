@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import os from 'node:os'; import fs from 'node:fs'; import path from 'node:path';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-api-'));
-process.env.BM_ADMIN_PASSWORD = 'Secret123';
+process.env.BM_ADMIN_PASSWORD = 'Secret123'; process.env.BM_SEED = 'sample';
 const { openDb } = await import('../server/db.js');
 const { createApp } = await import('../server/app.js');
 const { ensureAdmin } = await import('../server/auth.js');
@@ -109,6 +109,21 @@ await t('staff user can bill but not manage the menu', async () => {
 });
 await t('database backup download is a valid SQLite file', async () => {
   const r = await fetch(base + '/api/backup', { headers: { Cookie: cookie } }); assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0, 15).toString(), 'SQLite format 3');
+});
+await t('restore from a downloaded backup brings bills and menu prices back; bad file refused; login kept', async () => {
+  const count = () => db.prepare('SELECT COUNT(*) c FROM bills').get().c;
+  const price = () => db.prepare('SELECT price FROM items WHERE id=?').get(items[0].id).price;
+  const bk = Buffer.from(await (await fetch(base + '/api/backup', { headers: { Cookie: cookie } })).arrayBuffer());
+  const c0 = count(), p0 = price();
+  await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }));
+  await api('PUT', '/api/items/' + items[0].id, { ...items[0], price: p0 + 777 });
+  assert.equal(count(), c0 + 1); assert.equal(price(), p0 + 777);
+  assert.equal((await api('POST', '/api/restore', { data: Buffer.from('not a database at all, just text'.repeat(10)).toString('base64') })).s, 400);
+  const r = await api('POST', '/api/restore', { data: bk.toString('base64') });
+  assert.equal(r.s, 200); assert.equal(r.j.bills, c0);
+  assert.equal(count(), c0); assert.equal(price(), p0);
+  assert.equal((await api('GET', '/api/me')).s, 200);
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).s, 201); // billing still works after restore
 });
 await t('online payment is OFF by default: no link can be created, webhook refuses, no secrets/flags exposed', async () => {
   const b = (await api('POST', '/api/bills', newBill({ payment_method: 'upi', payment_status: 'pending', items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill;

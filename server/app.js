@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR, getSettings, setSetting } from './db.js';
 import { createXlsx } from './xlsx.js';
@@ -530,10 +531,47 @@ export function createApp(db) {
     return { __raw: buf, type: 'application/octet-stream', filename: `bite-and-melt-backup-${istDate()}.db` };
   });
 
+  // Restore bills/menu/settings from a backup (.db) downloaded earlier. Users and logins are NOT touched (the current admin stays logged in).
+  route('POST', '/api/restore', 'admin', (ctx) => {
+    const b64 = String(ctx.body.data || '');
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length < 100 || buf.subarray(0, 15).toString() !== 'SQLite format 3') throw bad('This is not a Bite and Melt backup (.db) file');
+    const tmp = path.join(DATA_DIR, 'backups', `restore-upload-${Date.now()}.db`);
+    fs.writeFileSync(tmp, buf);
+    const q = (f) => "'" + f.replace(/'/g, "''") + "'";
+    let attached = false;
+    try {
+      const probe = new DatabaseSync(tmp);
+      try {
+        const ic = probe.prepare('PRAGMA integrity_check').get();
+        if (!ic || Object.values(ic)[0] !== 'ok') throw bad('Backup file is damaged');
+        probe.prepare('SELECT COUNT(*) FROM bills').get(); probe.prepare('SELECT COUNT(*) FROM items').get();
+      } catch (e) { if (e instanceof HttpError) throw e; throw bad('This is not a Bite and Melt backup (.db) file'); } finally { probe.close(); }
+      backupTo(db, path.join(DATA_DIR, 'backups', `pre-restore-${Date.now()}.db`)); // safety copy of what is there now
+      db.exec(`ATTACH DATABASE ${q(tmp)} AS bk`); attached = true;
+      const cols = (schema, t) => db.prepare(`PRAGMA ${schema}.table_info(${t})`).all().map((c) => c.name);
+      const order = ['categories', 'items', 'counters', 'bills', 'bill_items', 'payments', 'payment_links', 'webhook_events', 'settings'];
+      const have = order.filter((t) => cols('bk', t).length);
+      const counts = {};
+      tx(() => {
+        for (const t of [...have].reverse()) db.exec(`DELETE FROM main.${t}`);
+        for (const t of have) {
+          const mine = new Set(cols('main', t)), common = cols('bk', t).filter((c) => mine.has(c)).join(',');
+          db.exec(`INSERT INTO main.${t}(${common}) SELECT ${common} FROM bk.${t}`);
+          counts[t] = db.prepare(`SELECT COUNT(*) n FROM main.${t}`).get().n;
+        }
+      });
+      return { ok: true, bills: counts.bills || 0, items: counts.items || 0 };
+    } finally {
+      if (attached) { try { db.exec('DETACH DATABASE bk'); } catch {} }
+      try { fs.unlinkSync(tmp); } catch {}
+    }
+  });
+
   // ---------------- http plumbing -------------------------------------------
-  async function readBody(req, ctx) {
+  async function readBody(req, ctx, limit = 3_000_000) {
     const chunks = []; let n = 0;
-    for await (const c of req) { n += c.length; if (n > 3_000_000) throw new HttpError(413, 'Request too large'); chunks.push(c); }
+    for await (const c of req) { n += c.length; if (n > limit) throw new HttpError(413, 'Request too large'); chunks.push(c); }
     const raw = Buffer.concat(chunks); if (ctx) ctx.raw = raw;
     if (!n) return {};
     try { return JSON.parse(raw.toString('utf8')); } catch { throw bad('Invalid JSON'); }
@@ -553,7 +591,7 @@ export function createApp(db) {
       if (!ctx.user) throw new HttpError(401, 'Please log in');
       if (r.auth === 'admin' && ctx.user.role !== 'admin') throw new HttpError(403, 'Admin access required');
     }
-    if (req.method !== 'GET') ctx.body = await readBody(req, ctx);
+    if (req.method !== 'GET') ctx.body = await readBody(req, ctx, url.pathname === '/api/restore' ? 60_000_000 : undefined);
     const out = await r.handler(ctx);
     if (out && out.__raw !== undefined) {
       res.writeHead(200, { 'Content-Type': out.type, 'Content-Disposition': `attachment; filename="${out.filename}"`, 'Cache-Control': 'no-store', ...secHeaders });

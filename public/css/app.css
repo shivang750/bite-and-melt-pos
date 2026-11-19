@@ -109,3 +109,4 @@ main,.card,.field,.filter-grid>*{min-width:0}
 /* touch targets: at least 44px */
 .status{min-height:44px}.pill{min-height:44px;padding-left:.9rem;padding-right:.9rem}.cart .link,.cart .link.danger-text{min-height:44px;display:inline-flex;align-items:center;padding:0 .5rem}.segmented button,.seg button{min-width:44px;min-height:44px}
 .nb>*{min-width:0}.chips{max-width:100%}
+.chips.wrap{flex-wrap:wrap;overflow:visible;gap:.45rem}.chips.wrap .chip{padding:.5rem .9rem}

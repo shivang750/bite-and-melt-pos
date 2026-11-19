@@ -10,7 +10,7 @@ const emptyCart = () => ({ lines: [], order_type: 'dine_in', notes: '', customer
 export function mount(root) {
   let cart = { ...emptyCart(), ...ls.get('bm_cart', {}) };
   if (!cart.client_id) cart.client_id = uuid();
-  let q = '', cat = 'all', saving = false;
+  let q = '', cat = (state.categories.find((c) => c.visible) || {}).id ?? 'all', saving = false;
   const persist = () => ls.set('bm_cart', cart);
 
   const priceOf = (l) => { const it = state.items.find((i) => i.id === l.item_id); return it ? it.price : l.price; };
@@ -23,7 +23,7 @@ export function mount(root) {
   const tick = () => { clock.textContent = fmtDateTime(new Date().toISOString()); };
   tick(); const clockT = setInterval(tick, 10000);
   const search = h('input', { type: 'search', placeholder: 'Search items…', 'aria-label': 'Search items', oninput: debounce((e) => { q = e.target.value.trim().toLowerCase(); renderItems(); }, 120) });
-  const chips = h('div', { class: 'chips' });
+  const chips = h('div', { class: 'chips wrap' });
   const grid = h('div', { class: 'item-grid' });
   const cartEl = h('aside', { class: 'cart' });
   const bar = h('button', { class: 'cartbar', type: 'button', onclick: () => cartEl.classList.add('open') });
@@ -33,12 +33,13 @@ export function mount(root) {
   root.replaceChildren(ui);
 
   function renderChips() {
-    chips.replaceChildren(h('button', { class: 'chip' + (cat === 'all' ? ' on' : ''), onclick: () => { cat = 'all'; renderChips(); renderItems(); } }, 'All'),
-      ...state.categories.filter((c) => c.visible).map((c) => h('button', { class: 'chip' + (cat === c.id ? ' on' : ''), onclick: () => { cat = c.id; renderChips(); renderItems(); } }, c.name)));
+    chips.replaceChildren(
+      ...state.categories.filter((c) => c.visible).map((c) => h('button', { class: 'chip' + (cat === c.id ? ' on' : ''), onclick: () => { cat = c.id; renderChips(); renderItems(); } }, c.name)),
+      h('button', { class: 'chip' + (cat === 'all' ? ' on' : ''), onclick: () => { cat = 'all'; renderChips(); renderItems(); } }, 'All'));
   }
   function renderItems() {
     const vis = new Set(state.categories.filter((c) => c.visible).map((c) => c.id));
-    const items = state.items.filter((i) => i.visible && (i.category_id == null || vis.has(i.category_id)) && (cat === 'all' || i.category_id === cat) && (!q || i.name.toLowerCase().includes(q)));
+    const items = state.items.filter((i) => i.visible && (i.category_id == null || vis.has(i.category_id)) && (cat === 'all' || q || i.category_id === cat) && (!q || i.name.toLowerCase().includes(q)));
     grid.replaceChildren(...(items.length ? items.map(itemCard) : [h('div', { class: 'empty' }, state.items.length ? 'No items match.' : 'No menu items yet. An admin can add items in Menu Management.')]));
   }
   function itemCard(it) {
@@ -128,6 +129,11 @@ export function mount(root) {
           field('Mobile (optional)', h('input', { type: 'tel', inputmode: 'numeric', maxlength: 17, class: phoneOk ? '' : 'invalid', value: cart.customer_phone, oninput: (e) => { cart.customer_phone = e.target.value; persist(); e.target.classList.toggle('invalid', !!e.target.value.trim() && !normalizeIndianMobile(e.target.value)); } }), phoneOk ? null : 'Enter a valid 10-digit Indian mobile')),
         field('Notes (optional)', h('input', { type: 'text', maxlength: 300, placeholder: 'e.g. less spicy, no onion', value: cart.notes, oninput: (e) => { cart.notes = e.target.value; persist(); } })),
         h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Bill discount'),
+          h('div', { class: 'chips wrap', role: 'group', 'aria-label': 'Quick bill discount' }, [0, 5, 10, 15, 20, 25, 50, 100].map((n) => {
+            const on = n === 0 ? cart.bill_disc_type === 'none' : (cart.bill_disc_type === 'percent' && Number(cart.bill_disc_value) === n);
+            return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on),
+              onclick: () => { if (n === 0) { cart.bill_disc_type = 'none'; cart.bill_disc_value = ''; } else { cart.bill_disc_type = 'percent'; cart.bill_disc_value = String(n); } changed(); } }, n === 0 ? 'No disc' : n + '%');
+          })),
           h('div', { class: 'disc-row' }, segmented([['none', 'None'], ['percent', '%'], ['amount', '₹']], cart.bill_disc_type, (v) => { cart.bill_disc_type = v; if (v === 'none') cart.bill_disc_value = ''; changed(); }), discInput)),
         totals,
         h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Payment method'),
