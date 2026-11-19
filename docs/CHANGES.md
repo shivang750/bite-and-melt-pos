@@ -18,3 +18,4 @@ Backups taken first (in `/home/claude/backups/`): database copy, full data folde
 * Settings > Backup & data: "Restore from backup (.db)" brings back menu, bills and settings from a downloaded backup. Staff accounts are not touched.
 * New Bill: category buttons (Burger, Sandwich, Pizza, ...) wrap so all are visible; the first category opens by default and shows only its own items; "All" is the last button; searching looks across every category.
 * Menu: new category "Cold Drinks" (Fanta, Sprite, Coke, Thums Up, Maaza, Sosyo, Diet Coke, Clear Water).
+* WhatsApp: "Send bill" opens the chat of the typed customer number with a thank-you message and a link to the bill (just press Send). The link (/b/<token>) opens the bill as an image page, with a Download button, and shows the bill as the link preview in WhatsApp. The link works only while the server keeps the bill (a free Render reset removes old links). "Share image", "Send as text" and "Share PDF" remain.

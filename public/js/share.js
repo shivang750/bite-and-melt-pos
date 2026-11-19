@@ -1,4 +1,5 @@
-import { normalizeIndianMobile } from './calc.js';
+import { normalizeIndianMobile, plain } from './calc.js';
+import { post } from './api.js';
 import { whatsappText } from './receipt.js';
 import { receiptPdf } from './pdf.js';
 import { receiptPng, receiptImageName, receiptCaption } from './receiptImage.js';
@@ -75,4 +76,20 @@ export function shareReceiptImage(bill, settings, phoneInput, prepared) {
     document.body.append(a); a.click(); a.remove();
     return copied ? 'copied' : 'downloaded';
   }
+}
+
+/** Uploads the receipt image the phone just drew and returns the public bill link (https://.../b/<token>) for this bill. */
+export async function uploadBillLink(bill, blob) {
+  const r = await post(`/api/bills/${bill.id}/share-link`, { png: await blobToBase64(blob) });
+  return r.url;
+}
+
+/** Opens the WhatsApp chat of the entered number with a short thank-you message and the bill link already typed. The person only presses Send. */
+export function openWhatsAppLink(bill, settings, phoneInput, link) {
+  const phone = normalizeIndianMobile(phoneInput);
+  if (!phone) throw new Error('Enter a valid 10-digit Indian mobile number (starting 6-9).');
+  const text = `Thank you for visiting ${settings.cafe_name || 'BITE AND MELT'}!\nBill ${bill.bill_no} | Total \u20B9${plain(bill.grand_total)}\nView / download your bill: ${link}`;
+  const a = document.createElement('a'); a.href = `https://wa.me/91${phone}?text=${encodeURIComponent(text)}`; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  document.body.append(a); a.click(); a.remove();
+  return phone;
 }

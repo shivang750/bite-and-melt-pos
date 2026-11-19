@@ -531,6 +531,20 @@ export function createApp(db) {
     return { __raw: buf, type: 'application/octet-stream', filename: `bite-and-melt-backup-${istDate()}.db` };
   });
 
+  // ---- WhatsApp bill link: the phone uploads the receipt image it just drew; customers open /b/<token> (public, unguessable).
+  const origin = (req) => `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http'}://${req.headers.host || 'localhost'}`;
+  route('POST', '/api/bills/:id/share-link', 'any', (ctx) => {
+    const b = sql('SELECT id, status, public_token FROM bills WHERE id=?').get(ctx.params.id);
+    if (!b) throw new HttpError(404, 'Bill not found');
+    if (b.status === 'void') throw bad('A cancelled bill cannot be shared');
+    const png = Buffer.from(String(ctx.body.png || ''), 'base64');
+    if (png.length < 200 || png.length > 2_000_000 || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw bad('Receipt image is not a valid PNG');
+    const token = b.public_token || crypto.randomBytes(15).toString('base64url');
+    if (!b.public_token) sql('UPDATE bills SET public_token=? WHERE id=?').run(token, b.id);
+    fs.writeFileSync(path.join(DATA_DIR, 'receipts', token + '.png'), png);
+    return { ok: true, token, url: `${origin(ctx.req)}/b/${token}` };
+  });
+
   // Restore bills/menu/settings from a backup (.db) downloaded earlier. Users and logins are NOT touched (the current admin stays logged in).
   route('POST', '/api/restore', 'admin', (ctx) => {
     const b64 = String(ctx.body.data || '');
@@ -632,9 +646,43 @@ export function createApp(db) {
     fs.createReadStream(file).pipe(res);
   }
 
+
+  // Public bill page + image for customers (no login). Only unguessable tokens; cancelled bills are not shown.
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function servePublicBill(req, res, url) {
+    const m = /^\/b\/([A-Za-z0-9_-]{16,40})(\.png)?$/.exec(url.pathname);
+    if (!m) return false;
+    const pubHeaders = { ...secHeaders, 'X-Robots-Tag': 'noindex, nofollow' };
+    const b = db.prepare("SELECT bill_no, grand_total, status FROM bills WHERE public_token=?").get(m[1]);
+    const file = path.join(DATA_DIR, 'receipts', m[1] + '.png');
+    if (!b || b.status === 'void' || !fs.existsSync(file)) {
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...pubHeaders });
+      res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bill not available</title><body style="font-family:system-ui;text-align:center;padding:3rem 1rem"><h2>This bill link is no longer available</h2><p>Please ask the cafe to send it again.</p></body>');
+      return true;
+    }
+    if (m[2]) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300', ...pubHeaders });
+      if (req.method === 'HEAD') res.end(); else fs.createReadStream(file).pipe(res);
+      return true;
+    }
+    const cafe = getSettings(db).cafe_name || 'BITE AND MELT';
+    const img = `${origin(req)}/b/${m[1]}.png`;
+    const title = `${cafe} - Bill ${b.bill_no}`;
+    const total = (b.grand_total / 100).toFixed(2);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...pubHeaders });
+    res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)}</title><meta name="robots" content="noindex,nofollow">
+<meta property="og:type" content="website"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="Total Rs. ${esc(total)}. Thank you for visiting!">
+<meta property="og:image" content="${esc(img)}"><meta name="twitter:card" content="summary">
+<style>body{margin:0;background:#eaf6ff;font-family:system-ui,sans-serif;text-align:center;color:#12213a}main{max-width:420px;margin:0 auto;padding:16px}img{width:100%;height:auto;background:#fff;border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.12)}a.b{display:inline-block;margin:14px 0 24px;padding:12px 22px;background:#ffc629;color:#12213a;font-weight:700;border-radius:999px;text-decoration:none}</style></head>
+<body><main><h2>${esc(cafe)}</h2><p>Bill ${esc(b.bill_no)} &middot; Total &#8377;${esc(total)}</p><img src="/b/${m[1]}.png" alt="Bill ${esc(b.bill_no)}"><br><a class="b" href="/b/${m[1]}.png" download="Bill-${esc(b.bill_no)}.png">Download bill</a></main></body></html>`);
+    return true;
+  }
+
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
+      if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/b/') && servePublicBill(req, res, url)) return;
       if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
       else if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/brand/logo.png' || url.pathname === '/brand/favicon.png')) serveBrand(res, url.pathname.includes('favicon') ? 'favicon' : 'logo');
       else if (req.method === 'GET' || req.method === 'HEAD') serveStatic(req, res, url);

@@ -6,7 +6,7 @@ import { LOGO_COLOR, svgDataUrl } from '../logo.js';
 import { state } from '../store.js';
 import { post } from '../api.js';
 import { printBill } from '../printer.js';
-import { openWhatsApp, sharePdf, prepareReceiptImage, shareReceiptImage } from '../share.js';
+import { openWhatsApp, sharePdf, prepareReceiptImage, shareReceiptImage, uploadBillLink, openWhatsAppLink } from '../share.js';
 
 export const statusBadge = (b) => b.status === 'void' ? badge('Cancelled', 'bad') : b.payment_status === 'paid' ? badge('Paid', 'good') : badge('Pending', 'warn');
 
@@ -31,7 +31,15 @@ export function showBill(initial, opts = {}) {
   function prepImage() {
     const key = [bill.id, bill.status, bill.payment_status, bill.payment_method, bill.payment_link && bill.payment_link.url].join('|');
     if (key === waImgKey) return; waImgKey = key; waImg = null; waImgErr = '';
-    prepareReceiptImage(bill, s).then((r) => { if (key === waImgKey) waImg = r; }).catch((e) => { if (key === waImgKey) waImgErr = e.message || 'image failed'; });
+    waLink = ''; waLinkBusy = false; waLinkErr = '';
+    prepareReceiptImage(bill, s).then((r) => { if (key === waImgKey) { waImg = r; tryUploadLink(); } }).catch((e) => { if (key === waImgKey) waImgErr = e.message || 'image failed'; });
+  }
+  // Public bill link: uploaded ahead of the tap (once a valid mobile number is typed) so WhatsApp can open straight from the tap.
+  let waLink = '', waLinkBusy = false, waLinkErr = '';
+  function tryUploadLink() {
+    if (!waImg || waLink || waLinkBusy || waLinkErr || !bill.id || bill.local || bill.status === 'void' || !normalizeIndianMobile(phoneVal)) return;
+    const key = waImgKey; waLinkBusy = true;
+    uploadBillLink(bill, waImg.blob).then((u) => { if (key === waImgKey) waLink = u; }).catch((e) => { if (key === waImgKey) waLinkErr = e.message || 'link failed'; }).finally(() => { if (key === waImgKey) waLinkBusy = false; });
   }
   async function ensureLink() {
     if (!needsLink() || linkLive() || linkBusy) return;
@@ -93,7 +101,7 @@ export function showBill(initial, opts = {}) {
 
     // WhatsApp
     prepImage();
-    const phone = h('input', { type: 'tel', inputmode: 'numeric', autocomplete: 'off', placeholder: '10-digit mobile e.g. 98765 43210', value: phoneVal, maxlength: 17, oninput: (e) => { phoneVal = e.target.value; } });
+    const phone = h('input', { type: 'tel', inputmode: 'numeric', autocomplete: 'off', placeholder: '10-digit mobile e.g. 98765 43210', value: phoneVal, maxlength: 17, oninput: (e) => { phoneVal = e.target.value; tryUploadLink(); } });
     const err = h('div', { class: 'err small' });
     const note = h('div', { class: 'muted small' });
     const wa = () => {
@@ -114,6 +122,20 @@ export function showBill(initial, opts = {}) {
         }).catch((e) => { err.textContent = e.message; });
       } catch (e) { err.textContent = e.message; phone.focus(); }
     };
+    const waLinkSend = () => {
+      err.textContent = '';
+      if (needsLink() && !linkLive()) {
+        if (linkBusy) { toast('Preparing the payment link… tap again in a moment', 'info'); return; }
+        if (!linkTried) { ensureLink(); toast('Preparing the payment link… tap again in a moment', 'info'); return; }
+        if (!confirm('The online payment link could not be created. Send the bill on WhatsApp without a Pay Now link?')) return;
+      }
+      if (!bill.id || bill.local) { err.textContent = 'This bill is not saved on the server yet (offline). Use "Share image" instead.'; return; }
+      if (!normalizeIndianMobile(phone.value)) { err.textContent = 'Enter a valid 10-digit Indian mobile number (starting 6-9).'; phone.focus(); return; }
+      if (waLinkErr) { err.textContent = 'Could not create the bill link (' + waLinkErr + '). Tap again to retry, or use "Share image".'; waLinkErr = ''; tryUploadLink(); return; }
+      if (!waLink) { tryUploadLink(); toast('Preparing the bill link… tap again in a moment', 'info'); return; }
+      try { openWhatsAppLink(bill, s, phone.value, waLink); note.textContent = 'WhatsApp opened on this number with the bill link ready. Press Send inside WhatsApp - we cannot see whether it was delivered.'; }
+      catch (e) { err.textContent = e.message; phone.focus(); }
+    };
     const sendText = () => {
       err.textContent = '';
       try { openWhatsApp(bill, s, phone.value); note.textContent = 'WhatsApp was opened with the text message ready. Press Send inside WhatsApp - we cannot see whether it was delivered.'; }
@@ -121,9 +143,9 @@ export function showBill(initial, opts = {}) {
     };
     body.append(h('div', { class: 'wa-box' },
       h('div', { class: 'lbl' }, 'Send on WhatsApp'),
-      h('div', { class: 'wa-row' }, phone, btn('Send receipt image', { cls: 'wa', ic: 'wa', onclick: wa })),
+      h('div', { class: 'wa-row' }, phone, btn('Send bill', { cls: 'wa', ic: 'wa', onclick: waLinkSend })),
       err,
-      h('div', { class: 'actions-row' }, btn('Send as text', { cls: 'ghost', ic: 'wa', onclick: sendText }), btn('Share PDF', { cls: 'ghost', ic: 'share', onclick: async () => {
+      h('div', { class: 'actions-row' }, btn('Share image', { cls: 'ghost', ic: 'share', onclick: wa }), btn('Send as text', { cls: 'ghost', ic: 'wa', onclick: sendText }), btn('Share PDF', { cls: 'ghost', ic: 'share', onclick: async () => {
         try { const r = await sharePdf(bill, s); if (r === 'downloaded') toast('PDF saved to your downloads. Attach it in WhatsApp.', 'info'); else if (r === 'shared') toast('Share sheet opened - choose WhatsApp.', 'info'); }
         catch (e) { toast('Could not create PDF: ' + e.message, 'error'); } } })),
       note));

@@ -110,6 +110,24 @@ await t('staff user can bill but not manage the menu', async () => {
 await t('database backup download is a valid SQLite file', async () => {
   const r = await fetch(base + '/api/backup', { headers: { Cookie: cookie } }); assert.equal(Buffer.from(await r.arrayBuffer()).subarray(0, 15).toString(), 'SQLite format 3');
 });
+await t('WhatsApp bill link: upload image -> public page + image (no login), bad PNG refused, cancelled bill hidden', async () => {
+  const b = (await api('POST', '/api/bills', newBill({ items: [{ item_id: items[0].id, qty: 1 }] }))).j.bill;
+  const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(400, 7)]);
+  assert.equal((await api('POST', `/api/bills/${b.id}/share-link`, { png: Buffer.from('not a png'.repeat(40)).toString('base64') })).s, 400);
+  const r = await api('POST', `/api/bills/${b.id}/share-link`, { png: png.toString('base64') });
+  assert.equal(r.s, 200); assert.match(r.j.url, /\/b\/[A-Za-z0-9_-]{16,}$/);
+  const again = await api('POST', `/api/bills/${b.id}/share-link`, { png: png.toString('base64') });
+  assert.equal(again.j.token, r.j.token); // same bill keeps the same link
+  const path = new URL(r.j.url).pathname;
+  const page = await fetch(base + path); const html = await page.text();
+  assert.equal(page.status, 200); assert.ok(html.includes('og:image') && html.includes(b.bill_no) && html.includes(path + '.png'));
+  const img = await fetch(base + path + '.png');
+  assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
+  assert.equal((await fetch(base + '/b/AAAAAAAAAAAAAAAAAAAA')).status, 404);
+  assert.equal((await fetch(base + '/api/bills/' + b.id + '/share-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ png: png.toString('base64') }) })).status, 401); // not logged in
+  const v = await api('POST', `/api/bills/${b.id}/void`, { admin_password: 'Secret123', reason: 'test' });
+  assert.equal(v.s, 200); assert.equal((await fetch(base + path)).status, 404);
+});
 await t('restore from a downloaded backup brings bills and menu prices back; bad file refused; login kept', async () => {
   const count = () => db.prepare('SELECT COUNT(*) c FROM bills').get().c;
   const price = () => db.prepare('SELECT price FROM items WHERE id=?').get(items[0].id).price;

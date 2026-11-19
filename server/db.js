@@ -57,6 +57,10 @@ CREATE INDEX IF NOT EXISTS idx_plinks_bill ON payment_links(bill_id);
 CREATE TABLE IF NOT EXISTS webhook_events (
   event_key TEXT PRIMARY KEY, provider TEXT NOT NULL, received_at TEXT NOT NULL, outcome TEXT DEFAULT '');
 `);
+  // Public bill links (WhatsApp): random token per bill. Added later, so migrate older databases.
+  if (!db.prepare('PRAGMA table_info(bills)').all().some((c) => c.name === 'public_token')) db.exec('ALTER TABLE bills ADD COLUMN public_token TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_public_token ON bills(public_token) WHERE public_token IS NOT NULL');
+  fs.mkdirSync(path.join(DATA_DIR, 'receipts'), { recursive: true });
   seed(db);
   return db;
 }
