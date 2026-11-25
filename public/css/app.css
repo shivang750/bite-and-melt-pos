@@ -110,3 +110,6 @@ main,.card,.field,.filter-grid>*{min-width:0}
 .status{min-height:44px}.pill{min-height:44px;padding-left:.9rem;padding-right:.9rem}.cart .link,.cart .link.danger-text{min-height:44px;display:inline-flex;align-items:center;padding:0 .5rem}.segmented button,.seg button{min-width:44px;min-height:44px}
 .nb>*{min-width:0}.chips{max-width:100%}
 .chips.wrap{flex-wrap:wrap;overflow:visible;gap:.45rem}.chips.wrap .chip{padding:.5rem .9rem}
+.grow{flex:1;min-width:0}.insta-on{align-items:center}.insta-on .btn,.insta-on .link{white-space:nowrap}
+.insta-row{display:flex;gap:.5rem;align-items:center}.insta-row>input{flex:1;min-width:0}
+.follows{margin:.4rem 0}.chip.used{background:#fff1f1;border-color:#e57373;color:#8a1c1c}

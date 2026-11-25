@@ -23,7 +23,7 @@ const mock = http.createServer((req, res) => { let b = ''; req.on('data', (c) =>
   assert(text.includes('Pay Now:* https://rzp.io/mock/e2e1')); assert(/Order No: BM-/.test(text)); assert(/Payment Ref: BM-.*-P1/.test(text)); assert(!/UPI:|@/.test(text.split('Pay Now')[0].split('Payment:')[1] || '')); assert(!text.includes('Pay via UPI'));
   n++; console.log('  ✓ WhatsApp message contains Pay Now link, order number, payment reference and no UPI ID');
   await page.evaluate(() => { window.__cap = null; navigator.canShare = () => true; navigator.share = async (d) => { window.__cap = d.text; }; });
-  await page.getByRole('button', { name: /Send receipt image/ }).click(); await page.waitForTimeout(600);
+  await page.getByRole('button', { name: /Share image/ }).click(); await page.waitForTimeout(600);
   const cap = await page.evaluate(() => window.__cap); assert(cap && cap.includes('Pay Now:* https://rzp.io/mock/e2e1') && /Payment Ref: BM-.*-P1/.test(cap));
   n++; console.log('  ✓ receipt-image share caption carries the Pay Now link, order number and payment reference');
   assert.equal(errors.length, 0, errors.join()); n++; console.log('  ✓ no JavaScript errors');

@@ -18,6 +18,22 @@ export function mount(root, go) {
   card('My account', h('div', { class: 'muted' }, `Signed in as ${state.user.username} (${state.user.role})`),
     h('div', { class: 'row-gap' }, btn('Change password', { cls: 'ghost', onclick: () => changePasswordModal() }), btn('Log out', { cls: 'ghost', ic: 'logout', onclick: async () => { await post('/api/logout').catch(() => {}); clearLocalSession(); location.hash = ''; location.reload(); } })));
 
+  // ---- Instagram follower helper (admin)
+  if (isAdmin) {
+    const box = h('div', { class: 'muted small' }, 'Loading…');
+    const cp = (text, label) => navigator.clipboard.writeText(text).then(() => toast(label + ' copied', 'ok')).catch(() => toast('Copy failed - select the text and copy it by hand', 'error'));
+    card('Instagram follower helper (Android)', h('p', { class: 'muted small' }, 'Install the helper app on the Android phone that is logged in to the cafe Instagram. It sends the names from "started following you" notifications here, so they show in New Bill.'), box);
+    get('/api/insta-helper').then((d) => {
+      const when = d.last_contact ? new Date(d.last_contact).toLocaleString('en-IN') : 'never';
+      const link = location.origin;
+      box.replaceChildren(
+        field('POS link (type this in the helper app)', h('input', { type: 'text', readonly: true, value: link, onclick: (e) => e.target.select() })),
+        field('Helper key (type this in the helper app)', h('input', { type: 'text', readonly: true, value: d.key, onclick: (e) => e.target.select() })),
+        h('div', { class: 'row-gap' }, btn('Copy link', { cls: 'ghost', onclick: () => cp(link, 'Link') }), btn('Copy key', { cls: 'ghost', onclick: () => cp(d.key, 'Key') })),
+        h('p', null, 'Helper app last contacted: ', h('b', null, when), d.last_follow ? ` · last follower: ${d.last_follow.name}` : '', ` · ${d.total} follower notifications saved`));
+    }).catch((e) => { box.textContent = e.message; });
+  }
+
   // ---- printer
   const p = printerPrefs();
   const pStatus = h('div', { class: 'muted small' });

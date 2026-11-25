@@ -63,7 +63,7 @@ export function buildLocalBill(payload, billNo, when) {
     billDiscType: payload.bill_disc_type, billDiscValue: payload.bill_disc_value, gst: { enabled: s.gst_enabled, rate: s.gst_rate, mode: s.gst_mode }, roundOff: s.round_off });
   return {
     id: null, local: true, bill_no: billNo, client_id: payload.client_id, created_at: when.toISOString().replace(/\.\d{3}Z$/, 'Z'),
-    order_type: payload.order_type, customer_name: payload.customer_name || '', customer_phone: payload.customer_phone || '', notes: payload.notes || '',
+    order_type: payload.order_type, customer_name: payload.customer_name || '', customer_phone: payload.customer_phone || '', notes: payload.notes || '', insta_handle: payload.insta_handle || '',
     subtotal: calc.subtotal, item_discount: calc.itemDiscount, bill_discount: calc.billDiscount, discount_total: calc.discountTotal, tax_total: calc.tax, round_off: calc.roundOff, grand_total: calc.grandTotal,
     gst_rate: s.gst_enabled ? s.gst_rate : 0, gst_mode: s.gst_mode, payment_method: payload.payment_method, payment_status: calc.grandTotal <= 0 ? 'paid' : payload.payment_status, status: 'active',
     items: lines.map((l, i) => ({ name: l.name, category: l.category, qty: l.qty, price: l.price, disc_type: l.disc_type, disc_value: l.disc_value, disc_amount: calc.lines[i].disc, line_total: calc.lines[i].net })),

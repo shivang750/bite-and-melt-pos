@@ -163,4 +163,60 @@ await t('food photo upload is stored permanently, served, and shown on the item;
   assert.equal((await api('POST', '/api/upload', { data: 'data:image/png;base64,AAAA' })).s, 400); // fake image refused
   assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'uploads', path.basename(up.j.url))), true); // on disk in the data folder, survives restarts
 });
+await t('Instagram offer: 10% once per username AND per mobile; repeat is blocked; freed if the bill is cancelled', async () => {
+  const it = items[0], line = [{ item_id: it.id, qty: 2 }];
+  assert.equal((await api('GET', '/api/insta-offer/check?handle=@Rahul_1&phone=9876543210')).j.ok, true);
+  assert.equal((await api('POST', '/api/bills', newBill({ items: line, insta_handle: '@Rahul_1' }))).s, 400); // mobile is required
+  const a = await api('POST', '/api/bills', newBill({ items: line, customer_phone: '9876543210', insta_handle: '@Rahul_1', bill_disc_type: 'percent', bill_disc_value: 50 }));
+  assert.equal(a.s, 201); assert.equal(a.j.bill.insta_handle, 'rahul_1');
+  assert.equal(a.j.bill.bill_discount, Math.round(it.price * 2 * 0.1)); // forced to 10%, client's 50% ignored
+  const chk = (await api('GET', '/api/insta-offer/check?handle=rahul_1&phone=9111111111')).j; assert.equal(chk.ok, false); assert.match(chk.message, /already used/);
+  assert.equal((await api('POST', '/api/bills', newBill({ items: line, customer_phone: '9111111111', insta_handle: 'RAHUL_1' }))).s, 409); // same username, other number
+  assert.equal((await api('POST', '/api/bills', newBill({ items: line, customer_phone: '9876543210', insta_handle: 'new_acc' }))).s, 409); // same number, new account
+  assert.equal((await api('POST', '/api/bills', newBill({ items: line, customer_phone: '9222222222', insta_handle: 'someone_else' }))).s, 201); // a different person is fine
+  assert.equal((await api('POST', `/api/bills/${a.j.bill.id}/void`, { reason: 'test', admin_password: 'Secret123' })).s, 200);
+  assert.equal((await api('GET', '/api/insta-offer/check?handle=rahul_1&phone=9876543210')).j.ok, true); // cancelled bill frees the offer
+});
+await t('edit a saved bill: add/remove items, totals recomputed, old prices kept, payment record follows, log written', async () => {
+  const a = items[0], b = items[1];
+  const made = (await api('POST', '/api/bills', newBill({ items: [{ item_id: a.id, qty: 1 }] }))).j.bill;
+  await api('PUT', '/api/items/' + a.id, { price: a.price + 5000 }); // menu price rises after the bill was made
+  const r = await api('POST', `/api/bills/${made.id}/edit`, { items: [{ item_id: a.id, qty: 2 }, { item_id: b.id, qty: 1 }], order_type: 'takeaway', customer_name: 'Ravi', customer_phone: '', notes: 'x' });
+  assert.equal(r.s, 200);
+  assert.equal(r.j.bill.grand_total, a.price * 2 + b.price); // item a keeps its ORIGINAL price, b uses current price
+  assert.equal(r.j.bill.bill_no, made.bill_no); assert.equal(r.j.bill.edit_count, 1); assert.equal(r.j.bill.order_type, 'takeaway');
+  const pay = db.prepare('SELECT SUM(amount) s FROM payments WHERE bill_id=?').get(made.id).s; assert.equal(pay, r.j.bill.grand_total);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM bill_edits WHERE bill_id=?').get(made.id).n, 1);
+  const r2 = await api('POST', `/api/bills/${made.id}/edit`, { items: [{ item_id: b.id, qty: 1 }], order_type: 'dine_in' });
+  assert.equal(r2.j.bill.grand_total, b.price); assert.equal(r2.j.bill.items.length, 1);
+  assert.equal((await api('POST', `/api/bills/${made.id}/edit`, { items: [] })).s, 400);
+  assert.equal((await api('POST', `/api/bills/${made.id}/edit`, { items: [{ item_id: b.id, qty: 1 }], insta_handle: 'edit_user' })).s, 400); // insta needs mobile
+  const ok = await api('POST', `/api/bills/${made.id}/edit`, { items: [{ item_id: b.id, qty: 1 }], customer_phone: '9333333333', insta_handle: 'edit_user' });
+  assert.equal(ok.s, 200); assert.equal(ok.j.bill.bill_discount, Math.round(b.price * 0.1));
+  await api('PUT', '/api/items/' + a.id, { price: a.price });
+  await api('POST', `/api/bills/${made.id}/void`, { reason: 't', admin_password: 'Secret123' });
+  assert.equal((await api('POST', `/api/bills/${made.id}/edit`, { items: [{ item_id: b.id, qty: 1 }] })).s, 409); // cancelled bills cannot be edited
+});
+await t('Instagram helper: key needed, follow notifications parsed + de-duplicated, listed with used/refollow flags', async () => {
+  const key = (await api('GET', '/api/insta-helper')).j.key; assert.ok(key && key.length >= 20);
+  const ing = (body, k = key) => api('POST', '/api/insta-follows/ingest', body, ''); // no login cookie: only the helper key
+  const post = (body, k = key) => fetch(base + '/api/insta-follows/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-helper-key': k }, body: JSON.stringify(body) }).then(async (r) => ({ s: r.status, j: await r.json() }));
+  assert.equal((await ing({ text: 'x started following you' })).s, 401);
+  assert.equal((await post({ text: 'x started following you' }, 'wrong-key')).s, 401);
+  assert.equal((await post({ test: true })).j.ok, true);
+  assert.equal((await post({ title: 'Instagram', text: 'Neha_Shah started following you.' })).j.saved, 1);
+  assert.equal((await post({ title: 'Instagram', text: 'Neha_Shah started following you.' })).j.saved, 0); // same notification re-posted
+  assert.equal((await post({ title: 'karan.p', text: 'started following you.' })).j.saved, 1); // name in the title
+  assert.equal((await post({ title: 'Instagram', text: 'amit_1, riya_2 and 3 others started following you' })).j.saved, 2);
+  assert.equal((await post({ title: 'Instagram', text: 'John liked your photo' })).j.saved, 0); // other notifications ignored
+  const list = (await api('GET', '/api/insta-follows')).j.follows; const names = list.map((f) => f.name);
+  for (const n of ['Neha_Shah', 'karan.p', 'amit_1', 'riya_2']) assert.ok(names.includes(n), n);
+  assert.equal((await api('GET', '/api/insta-follows', null, '')).s, 401);
+  // use the offer for Neha_Shah, then she shows as already used
+  const it = items[0];
+  assert.equal((await api('POST', '/api/bills', newBill({ items: [{ item_id: it.id, qty: 1 }], customer_phone: '9444444444', insta_handle: 'neha_shah' }))).s, 201);
+  const after = (await api('GET', '/api/insta-follows')).j.follows.find((f) => f.name === 'Neha_Shah'); assert.ok(after.used_bill_no);
+  assert.equal((await api('GET', '/api/insta-follows')).j.follows.find((f) => f.name === 'karan.p').used_bill_no, '');
+  const staff = (await api('GET', '/api/insta-helper', null, 'bm_session=bad')).s; assert.equal(staff, 401);
+});
 srv.close(); console.log(`\n${n} backend checks passed` + (process.exitCode ? ' — SOME FAILED' : '')); process.exit(process.exitCode || 0);

@@ -19,3 +19,15 @@ Backups taken first (in `/home/claude/backups/`): database copy, full data folde
 * New Bill: category buttons (Burger, Sandwich, Pizza, ...) wrap so all are visible; the first category opens by default and shows only its own items; "All" is the last button; searching looks across every category.
 * Menu: new category "Cold Drinks" (Fanta, Sprite, Coke, Thums Up, Maaza, Sosyo, Diet Coke, Clear Water).
 * WhatsApp: "Send bill" opens the chat of the typed customer number with a thank-you message and a link to the bill (just press Send). The link (/b/<token>) opens the bill as an image page, with a Download button, and shows the bill as the link preview in WhatsApp. The link works only while the server keeps the bill (a free Render reset removes old links). "Share image", "Send as text" and "Share PDF" remain.
+* cPanel / shared hosting ("Setup Node.js App"): startup file is `app.cjs` (loads the POS with a dynamic import). Optional env var `PUBLIC_URL` (e.g. https://yourdomain.com) fixes the WhatsApp bill link when the host does not pass the https header. PORT may be a number or a socket path.
+
+## v7 - Instagram offer + edit saved bill
+- **Instagram offer (10% off, once only):** New Bill > "Instagram offer". Staff checks the customer's "Following" screen, types the Instagram username (mobile number needed first), taps "Check & apply". The bill gets a fixed 10% discount and prints "Instagram offer: @username". The same username OR the same mobile number can never get the offer a second time (follow/unfollow/refollow, new account with same number - all blocked). If that bill is cancelled the offer is free again. Instagram cannot be checked automatically (Instagram does not allow it), so staff must look at the customer's screen.
+- **Edit a saved bill:** open any bill > "Edit bill". Add/remove items, change quantity, customer, notes, discount. Old items keep their old price. Bill number stays the same. Paid bills: the payment record is updated to the new total (collect/return the difference). Staff can edit only today's bills; admin can edit any day. Every edit is logged (bill_edits table). Online-paid bills and cancelled bills cannot be edited. Old shared WhatsApp links are reset.
+- New tests: tests/e2e-insta.cjs, more checks in tests/api.js. Cache version bm-v9.
+
+## v8 - Instagram follower helper
+- New: Android helper app (separate project, `bite-and-melt-insta-helper.zip`) reads Instagram "started following you" notifications on the cafe's Android phone and sends them to POS (`POST /api/insta-follows/ingest`, protected by a helper key).
+- New Bill: "Recently followed" chips (last 6 hours). Tap a name to apply the 10% offer. Names that already got the offer show with a warning sign and the bill number; names that followed more than once show a refollow sign.
+- Settings (admin): "Instagram follower helper" card shows the POS link, helper key and when the helper last contacted the server.
+- New tables insta_follows, app_secrets (helper key). Followers log is kept 120 days. Cache version bm-v10.

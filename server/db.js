@@ -60,6 +60,20 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   // Public bill links (WhatsApp): random token per bill. Added later, so migrate older databases.
   if (!db.prepare('PRAGMA table_info(bills)').all().some((c) => c.name === 'public_token')) db.exec('ALTER TABLE bills ADD COLUMN public_token TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_public_token ON bills(public_token) WHERE public_token IS NOT NULL');
+  // Instagram offer + bill editing (added later; migrate older databases)
+  const billCols = db.prepare('PRAGMA table_info(bills)').all().map((c) => c.name);
+  for (const [col, ddl] of [['insta_handle', "TEXT NOT NULL DEFAULT ''"], ['edited_at', 'TEXT'], ['edited_by', "TEXT DEFAULT ''"], ['edit_count', 'INTEGER NOT NULL DEFAULT 0']]) {
+    if (!billCols.includes(col)) db.exec(`ALTER TABLE bills ADD COLUMN ${col} ${ddl}`);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_bills_insta ON bills(insta_handle) WHERE insta_handle != \'\'');
+  db.exec(`CREATE TABLE IF NOT EXISTS bill_edits (
+    id INTEGER PRIMARY KEY, bill_id INTEGER NOT NULL REFERENCES bills(id) ON DELETE CASCADE, edited_at TEXT NOT NULL, edited_by TEXT DEFAULT '',
+    old_total INTEGER NOT NULL, new_total INTEGER NOT NULL, old_items TEXT DEFAULT '')`);
+  db.exec(`CREATE TABLE IF NOT EXISTS insta_follows (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL, seen_at TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'follow', raw TEXT DEFAULT '');
+    CREATE INDEX IF NOT EXISTS idx_insta_follows_key ON insta_follows(name_key);
+    CREATE INDEX IF NOT EXISTS idx_insta_follows_seen ON insta_follows(seen_at);
+    CREATE TABLE IF NOT EXISTS app_secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
   fs.mkdirSync(path.join(DATA_DIR, 'receipts'), { recursive: true });
   seed(db);
   return db;

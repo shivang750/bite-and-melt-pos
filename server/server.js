@@ -14,5 +14,8 @@ if (created) {
 try { runBackup(db); } catch (e) { console.error('Backup failed:', e.message); }
 setInterval(() => { try { runBackup(db); } catch (e) { console.error('Backup failed:', e.message); } }, 6 * 3600 * 1000).unref();
 
-const port = Number(process.env.PORT || 3000);
-createApp(db).listen(port, process.env.HOST || '0.0.0.0', () => console.log(`BITE AND MELT POS running on http://localhost:${port}`));
+// PORT is a number on most hosts; cPanel/Passenger style hosts may give a socket path or manage the port themselves.
+const rawPort = process.env.PORT;
+const app = createApp(db);
+if (rawPort && !/^\d+$/.test(rawPort)) app.listen(rawPort, () => console.log(`BITE AND MELT POS running (${rawPort})`));
+else { const port = Number(rawPort || 3000); app.listen(port, process.env.HOST || '0.0.0.0', () => console.log(`BITE AND MELT POS running on http://localhost:${port}`)); }

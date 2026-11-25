@@ -58,6 +58,59 @@ export function createApp(db) {
   }
   const getBill = (id) => loadBills([sql('SELECT * FROM bills WHERE id=?').get(id)].filter(Boolean))[0];
 
+  // ---- shared bill helpers (used by create and edit)
+  const INSTA_PERCENT = 10;
+  const normHandle = (raw) => {
+    const h = String(raw ?? '').trim().toLowerCase().replace(/^https?:\/\/(www\.)?instagram\.com\//, '').replace(/[/?#].*$/, '').replace(/^@+/, '');
+    if (!h) return '';
+    if (!/^[a-z0-9._]{1,30}$/.test(h)) throw bad('Instagram username is not valid (only letters, numbers, dot and underscore)');
+    return h;
+  };
+  /** the most recent ACTIVE bill that already used the Instagram offer by this username or this mobile number */
+  const instaUsedBy = (handle, phone, exceptBillId) => sql(`SELECT bill_no, local_date, insta_handle, customer_phone FROM bills
+    WHERE status='active' AND insta_handle != '' AND id != ? AND (insta_handle=? OR (?!='' AND customer_phone=?)) ORDER BY id DESC LIMIT 1`).get(exceptBillId ?? -1, handle, phone || '', phone || '');
+  const instaMessage = (u, handle, phone) => `Instagram offer already used (${u.insta_handle === handle ? '@' + handle : 'mobile ' + phone}) on bill ${u.bill_no} dated ${u.local_date}. It can be used only once.`;
+  function instaFor(body, phone, offline, exceptBillId) {
+    const handle = normHandle(body.insta_handle);
+    if (!handle) return null;
+    if (!phone) throw bad('Customer mobile number is needed for the Instagram offer');
+    const u = instaUsedBy(handle, phone, exceptBillId);
+    if (u && !offline) throw new HttpError(409, instaMessage(u, handle, phone));
+    return { handle };
+  }
+  function billDiscountOf(body, insta) {
+    if (insta) return { type: 'percent', value: INSTA_PERCENT, handle: insta.handle };
+    const type = ['percent', 'amount'].includes(body.bill_disc_type) ? body.bill_disc_type : 'none';
+    let value = 0;
+    if (type === 'percent') { value = Number(body.bill_disc_value); if (!(value >= 0 && value <= 100)) throw bad('Bill discount % must be 0-100'); }
+    if (type === 'amount') value = intIn(body.bill_disc_value, 0, 1_000_000_000, 'Bill discount');
+    return { type, value, handle: '' };
+  }
+  /** existing: Map(key -> bill_items row) when editing, so lines already on the bill keep their original name and price */
+  function makeLines(rawItems, { offline = false, existing = null } = {}) {
+    return rawItems.map((raw) => {
+      const qty = intIn(raw.qty, 1, MAX_QTY, 'Quantity');
+      const dbItem = raw.item_id ? sql('SELECT i.*, c.name AS cat FROM items i LEFT JOIN categories c ON c.id=i.category_id WHERE i.id=?').get(raw.item_id) : null;
+      const old = existing ? existing.get(raw.item_id ? 'i:' + raw.item_id : 'n:' + String(raw.name || '')) : null;
+      let name, price, category;
+      if (old) { name = old.name; price = old.price; category = old.category || ''; }
+      else if (offline) { // sold while offline: the price the customer was shown is the truth
+        name = str(raw.name || dbItem?.name, 80, 'Item name', { required: true });
+        price = intIn(raw.price, 0, MAX_PRICE, 'Price');
+        category = str(raw.category || dbItem?.cat || '', 40, 'Category');
+      } else {
+        if (!dbItem) throw bad('An item on this bill no longer exists. Refresh the menu and try again.');
+        if (!dbItem.available) throw bad(`"${dbItem.name}" is marked Out of Stock`);
+        name = dbItem.name; price = dbItem.price; category = dbItem.cat || '';
+      }
+      const dt = ['percent', 'amount'].includes(raw.disc_type) ? raw.disc_type : 'none';
+      let dv = 0;
+      if (dt === 'percent') { dv = Number(raw.disc_value); if (!(dv >= 0 && dv <= 100)) throw bad('Item discount % must be 0-100'); }
+      if (dt === 'amount') dv = intIn(raw.disc_value, 0, MAX_PRICE * MAX_QTY, 'Item discount');
+      return { item_id: dbItem?.id ?? (old ? old.item_id : null), name, category, qty, price, disc_type: dt, disc_value: dv };
+    });
+  }
+
   function createBill(body, user) {
     const clientId = String(body.client_id || '');
     if (!/^[A-Za-z0-9_\-]{8,64}$/.test(clientId)) throw bad('client_id is required (8-64 letters/digits)');
@@ -78,30 +131,9 @@ export function createApp(db) {
     const offline = body.offline === true;
     const s = getSettings(db);
 
-    const lines = body.items.map((raw) => {
-      const qty = intIn(raw.qty, 1, MAX_QTY, 'Quantity');
-      const dbItem = raw.item_id ? sql('SELECT i.*, c.name AS cat FROM items i LEFT JOIN categories c ON c.id=i.category_id WHERE i.id=?').get(raw.item_id) : null;
-      let name, price, category;
-      if (offline) { // sold while offline: the price the customer was shown is the truth
-        name = str(raw.name || dbItem?.name, 80, 'Item name', { required: true });
-        price = intIn(raw.price, 0, MAX_PRICE, 'Price');
-        category = str(raw.category || dbItem?.cat || '', 40, 'Category');
-      } else {
-        if (!dbItem) throw bad('An item on this bill no longer exists. Refresh the menu and try again.');
-        if (!dbItem.available) throw bad(`"${dbItem.name}" is marked Out of Stock`);
-        name = dbItem.name; price = dbItem.price; category = dbItem.cat || '';
-      }
-      const dt = ['percent', 'amount'].includes(raw.disc_type) ? raw.disc_type : 'none';
-      let dv = 0;
-      if (dt === 'percent') { dv = Number(raw.disc_value); if (!(dv >= 0 && dv <= 100)) throw bad('Item discount % must be 0-100'); }
-      if (dt === 'amount') dv = intIn(raw.disc_value, 0, MAX_PRICE * MAX_QTY, 'Item discount');
-      return { item_id: dbItem?.id ?? null, name, category, qty, price, disc_type: dt, disc_value: dv };
-    });
-    const bdt = ['percent', 'amount'].includes(body.bill_disc_type) ? body.bill_disc_type : 'none';
-    let bdv = 0;
-    if (bdt === 'percent') { bdv = Number(body.bill_disc_value); if (!(bdv >= 0 && bdv <= 100)) throw bad('Bill discount % must be 0-100'); }
-    if (bdt === 'amount') bdv = intIn(body.bill_disc_value, 0, 1_000_000_000, 'Bill discount');
-
+    const lines = makeLines(body.items, { offline });
+    const bd = billDiscountOf(body, instaFor(body, phone, offline, null));
+    const bdt = bd.type, bdv = bd.value, instaHandle = bd.handle;
     const calc = computeBill(lines.map((l) => ({ price: l.price, qty: l.qty, discType: l.disc_type, discValue: l.disc_value })), {
       billDiscType: bdt, billDiscValue: bdv, gst: { enabled: s.gst_enabled, rate: s.gst_rate, mode: s.gst_mode }, roundOff: s.round_off,
     });
@@ -121,10 +153,10 @@ export function createApp(db) {
       let billNo = null;
       if (offline && /^[A-Za-z0-9\-_]{4,40}$/.test(String(body.bill_no || '')) && !sql('SELECT 1 FROM bills WHERE bill_no=?').get(body.bill_no)) billNo = body.bill_no;
       if (!billNo) billNo = nextBillNo(s.bill_format, createdAt);
-      const id = sql(`INSERT INTO bills(bill_no,client_id,created_at,local_date,order_type,customer_name,customer_phone,notes,subtotal,item_discount,bill_disc_type,bill_disc_value,bill_discount,discount_total,tax_total,round_off,grand_total,gst_rate,gst_mode,payment_method,payment_status,paid_at,payment_ref,created_by,offline,synced_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      const id = sql(`INSERT INTO bills(bill_no,client_id,created_at,local_date,order_type,customer_name,customer_phone,notes,subtotal,item_discount,bill_disc_type,bill_disc_value,bill_discount,discount_total,tax_total,round_off,grand_total,gst_rate,gst_mode,payment_method,payment_status,paid_at,payment_ref,created_by,offline,synced_at,insta_handle)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         billNo, clientId, iso, istDate(createdAt), orderType, customerName, phone, notes, calc.subtotal, calc.itemDiscount, bdt, bdv, calc.billDiscount, calc.discountTotal, calc.tax, calc.roundOff, calc.grandTotal,
-        s.gst_enabled ? s.gst_rate : 0, s.gst_mode, method, status, status === 'paid' ? iso : null, str(body.payment_ref, 60, 'Payment reference'), user.username, offline ? 1 : 0, offline ? new Date().toISOString() : null,
+        s.gst_enabled ? s.gst_rate : 0, s.gst_mode, method, status, status === 'paid' ? iso : null, str(body.payment_ref, 60, 'Payment reference'), user.username, offline ? 1 : 0, offline ? new Date().toISOString() : null, instaHandle,
       ).lastInsertRowid;
       lines.forEach((l, i) => sql('INSERT INTO bill_items(bill_id,item_id,name,category,qty,price,disc_type,disc_value,disc_amount,line_total) VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(id, l.item_id, l.name, l.category, l.qty, l.price, l.disc_type, l.disc_value, calc.lines[i].disc, calc.lines[i].net));
@@ -504,6 +536,129 @@ export function createApp(db) {
     }
   });
 
+  // ---- Instagram follower helper (Android phone app forwards "xyz started following you" notifications here)
+  const helperKey = () => {
+    const r = sql("SELECT value FROM app_secrets WHERE key='insta_helper_key'").get();
+    if (r) return r.value;
+    const v = crypto.randomBytes(18).toString('base64url');
+    sql("INSERT INTO app_secrets(key,value) VALUES('insta_helper_key',?)").run(v);
+    return v;
+  };
+  const keyOk = (given) => { const a = Buffer.from(String(given || '')), b = Buffer.from(helperKey()); return a.length === b.length && crypto.timingSafeEqual(a, b); };
+  const nameKey = (n) => String(n).toLowerCase().replace(/^@+/, '').replace(/\s+/g, ' ').trim();
+  /** "rahul_1 started following you." / "a, b and 3 others started following you" / title="rahul_1", text="started following you." */
+  function parseFollows(title, text) {
+    const out = [];
+    const verb = /\b(started following you|is now following you|are now following you|followed you|requested to follow you|started following)\b/i;
+    for (const line of String(text || '').split(/\r?\n/)) {
+      const m = verb.exec(line);
+      if (!m) continue;
+      const kind = /requested/i.test(m[1]) ? 'request' : 'follow';
+      let subject = line.slice(0, m.index).trim();
+      if (!subject && title && !/^instagram$/i.test(String(title).trim())) subject = String(title).trim();
+      for (let part of subject.split(/\s*,\s*|\s+and\s+/i)) {
+        part = part.replace(/^[@"'“‘\s]+|[.:"'”’\s]+$/g, '');
+        if (!part || /^\d+\s+others?$/i.test(part) || /^others?$/i.test(part) || part.length > 40) continue;
+        out.push({ name: part, kind });
+        if (out.length >= 5) return out;
+      }
+    }
+    return out;
+  }
+  route('POST', '/api/insta-follows/ingest', null, (ctx) => {
+    if (!keyOk(ctx.req.headers['x-helper-key'] || ctx.body.key)) throw new HttpError(401, 'Wrong helper key');
+    const now = new Date(), iso = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    sql("INSERT INTO app_secrets(key,value) VALUES('insta_helper_ping',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(iso);
+    if (ctx.body.test === true) return { ok: true, test: true };
+    const found = parseFollows(str(ctx.body.title, 200, 'Title'), str(ctx.body.text, 2000, 'Text'));
+    let saved = 0;
+    for (const f of found) {
+      const k = nameKey(f.name);
+      if (!k) continue;
+      const recent = sql('SELECT 1 FROM insta_follows WHERE name_key=? AND kind=? AND seen_at > ?').get(k, f.kind, new Date(now.getTime() - 120000).toISOString().replace(/\.\d{3}Z$/, 'Z'));
+      if (recent) continue; // Instagram re-posts the same notification
+      sql('INSERT INTO insta_follows(name,name_key,seen_at,kind,raw) VALUES(?,?,?,?,?)').run(f.name, k, iso, f.kind, String(ctx.body.text || '').slice(0, 300));
+      saved++;
+    }
+    sql('DELETE FROM insta_follows WHERE seen_at < ?').run(new Date(now.getTime() - 120 * 864e5).toISOString().replace(/\.\d{3}Z$/, 'Z')); // keep 120 days
+    return { ok: true, saved, found: found.length };
+  });
+  // Recently followed names for the New Bill screen (newest first, one row per name)
+  route('GET', '/api/insta-follows', 'any', () => {
+    const since = new Date(Date.now() - 6 * 3600e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const rows = db.prepare('SELECT name, name_key, kind, MAX(seen_at) seen_at FROM insta_follows WHERE seen_at >= ? GROUP BY name_key ORDER BY MAX(id) DESC LIMIT 30').all(since);
+    return { follows: rows.map((r) => {
+      const used = sql("SELECT bill_no, local_date FROM bills WHERE status='active' AND insta_handle=? ORDER BY id DESC LIMIT 1").get(r.name_key);
+      const times = sql("SELECT COUNT(*) n FROM insta_follows WHERE name_key=? AND kind='follow'").get(r.name_key).n;
+      return { name: r.name, seen_at: r.seen_at, kind: r.kind, times, used_bill_no: used ? used.bill_no : '', used_date: used ? used.local_date : '' };
+    }) };
+  });
+  route('GET', '/api/insta-helper', 'admin', () => {
+    const ping = sql("SELECT value FROM app_secrets WHERE key='insta_helper_ping'").get();
+    const last = sql('SELECT name, seen_at FROM insta_follows ORDER BY id DESC LIMIT 1').get();
+    return { key: helperKey(), last_contact: ping ? ping.value : '', last_follow: last || null, total: sql('SELECT COUNT(*) n FROM insta_follows').get().n };
+  });
+
+  // Is this Instagram username / mobile number still eligible for the one-time 10% offer?
+  route('GET', '/api/insta-offer/check', 'any', (ctx) => {
+    const handle = normHandle(ctx.query.handle);
+    if (!handle) throw bad('Enter the customer\'s Instagram username');
+    const phone = normalizeIndianMobile(String(ctx.query.phone || ''));
+    if (!phone) throw bad('Enter a valid 10-digit customer mobile number first');
+    const u = instaUsedBy(handle, phone, ctx.query.except ? Number(ctx.query.except) : null);
+    if (u) return { ok: false, handle, message: instaMessage(u, handle, phone), bill_no: u.bill_no, date: u.local_date };
+    return { ok: true, handle, percent: INSTA_PERCENT, follow_events: sql("SELECT COUNT(*) n FROM insta_follows WHERE name_key=? AND kind='follow'").get(handle).n };
+  });
+
+  // Edit a saved bill: change items, quantities, customer, notes, discount. Totals are recomputed here; every edit is logged.
+  route('POST', '/api/bills/:id/edit', 'any', (ctx) => {
+    const b = sql('SELECT * FROM bills WHERE id=?').get(ctx.params.id);
+    if (!b) throw new HttpError(404, 'Bill not found');
+    if (b.status === 'void') throw new HttpError(409, 'A cancelled bill cannot be edited');
+    if (ctx.user.role !== 'admin' && b.local_date !== istDate()) throw new HttpError(403, 'Only an admin can edit a bill from an earlier day');
+    if (sql("SELECT 1 FROM payment_links WHERE bill_id=? AND status='paid'").get(b.id)) throw new HttpError(409, 'This bill was paid online and cannot be edited. Cancel it and make a new bill.');
+    const body = ctx.body;
+    const orderType = ['dine_in', 'takeaway', 'delivery'].includes(body.order_type) ? body.order_type : b.order_type;
+    const phoneRaw = str(body.customer_phone, 20, 'Mobile number');
+    let phone = '';
+    if (phoneRaw) { phone = normalizeIndianMobile(phoneRaw); if (!phone) throw bad('Enter a valid 10-digit Indian mobile number'); }
+    const customerName = str(body.customer_name, 60, 'Customer name');
+    const notes = str(body.notes, 300, 'Notes');
+    if (!Array.isArray(body.items) || !body.items.length) throw bad('A bill needs at least one item. To remove the whole bill, use Cancel bill.');
+    if (body.items.length > 100) throw bad('Too many lines on one bill');
+    const oldItems = db.prepare('SELECT * FROM bill_items WHERE bill_id=? ORDER BY id').all(b.id);
+    const existing = new Map();
+    for (const it of oldItems) { const k = it.item_id ? 'i:' + it.item_id : 'n:' + it.name; if (!existing.has(k)) existing.set(k, it); }
+    const lines = makeLines(body.items, { existing });
+    const bd = billDiscountOf(body, instaFor(body, phone, false, b.id));
+    const s = { gst_enabled: b.gst_rate > 0, gst_rate: b.gst_rate, gst_mode: b.gst_mode, round_off: getSettings(db).round_off }; // GST as it was when the bill was made
+    const calc = computeBill(lines.map((l) => ({ price: l.price, qty: l.qty, discType: l.disc_type, discValue: l.disc_value })), {
+      billDiscType: bd.type, billDiscValue: bd.value, gst: { enabled: s.gst_enabled, rate: s.gst_rate, mode: s.gst_mode }, roundOff: s.round_off });
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    tx(() => {
+      let payStatus = b.payment_status, paidAt = b.paid_at;
+      if (calc.grandTotal <= 0) { payStatus = 'paid'; paidAt = paidAt || now; }
+      sql(`UPDATE bills SET order_type=?, customer_name=?, customer_phone=?, notes=?, subtotal=?, item_discount=?, bill_disc_type=?, bill_disc_value=?, bill_discount=?, discount_total=?,
+        tax_total=?, round_off=?, grand_total=?, payment_status=?, paid_at=?, insta_handle=?, edited_at=?, edited_by=?, edit_count=edit_count+1, public_token=NULL WHERE id=?`)
+        .run(orderType, customerName, phone, notes, calc.subtotal, calc.itemDiscount, bd.type, bd.value, calc.billDiscount, calc.discountTotal, calc.tax, calc.roundOff, calc.grandTotal,
+          payStatus, payStatus === 'paid' ? paidAt : null, bd.handle, now, ctx.user.username, b.id);
+      sql('DELETE FROM bill_items WHERE bill_id=?').run(b.id);
+      lines.forEach((l, i) => sql('INSERT INTO bill_items(bill_id,item_id,name,category,qty,price,disc_type,disc_value,disc_amount,line_total) VALUES(?,?,?,?,?,?,?,?,?,?)')
+        .run(b.id, l.item_id, l.name, l.category, l.qty, l.price, l.disc_type, l.disc_value, calc.lines[i].disc, calc.lines[i].net));
+      if (payStatus === 'paid') { // keep the payment record equal to the new total
+        const first = sql('SELECT * FROM payments WHERE bill_id=? ORDER BY id LIMIT 1').get(b.id);
+        sql('DELETE FROM payments WHERE bill_id=?').run(b.id);
+        if (calc.grandTotal > 0) sql('INSERT INTO payments(bill_id,method,amount,reference,recorded_by,recorded_at,source) VALUES(?,?,?,?,?,?,?)')
+          .run(b.id, first?.method || b.payment_method, calc.grandTotal, first?.reference || b.payment_ref || '', first?.recorded_by || ctx.user.username, first?.recorded_at || now, first?.source || 'manual');
+      }
+      sql("UPDATE payment_links SET status='cancelled', updated_at=? WHERE bill_id=? AND status IN ('created','partial')").run(now, b.id); // old link had the old amount
+      sql('INSERT INTO bill_edits(bill_id,edited_at,edited_by,old_total,new_total,old_items) VALUES(?,?,?,?,?,?)')
+        .run(b.id, now, ctx.user.username, b.grand_total, calc.grandTotal, oldItems.map((i) => `${i.qty} x ${i.name} @${i.price}`).join('; '));
+    });
+    if (b.public_token) { try { fs.unlinkSync(path.join(DATA_DIR, 'receipts', b.public_token + '.png')); } catch {} } // old shared image is out of date
+    return { bill: getBill(b.id) };
+  });
+
   route('POST', '/api/bills/:id/void', 'any', (ctx) => {
     const b = sql('SELECT * FROM bills WHERE id=?').get(ctx.params.id);
     if (!b) throw new HttpError(404, 'Bill not found');
@@ -532,7 +687,7 @@ export function createApp(db) {
   });
 
   // ---- WhatsApp bill link: the phone uploads the receipt image it just drew; customers open /b/<token> (public, unguessable).
-  const origin = (req) => `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http'}://${req.headers.host || 'localhost'}`;
+  const origin = (req) => process.env.PUBLIC_URL ? process.env.PUBLIC_URL.replace(/\/+$/, '') : `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http'}://${req.headers.host || 'localhost'}`;
   route('POST', '/api/bills/:id/share-link', 'any', (ctx) => {
     const b = sql('SELECT id, status, public_token FROM bills WHERE id=?').get(ctx.params.id);
     if (!b) throw new HttpError(404, 'Bill not found');
@@ -564,7 +719,7 @@ export function createApp(db) {
       backupTo(db, path.join(DATA_DIR, 'backups', `pre-restore-${Date.now()}.db`)); // safety copy of what is there now
       db.exec(`ATTACH DATABASE ${q(tmp)} AS bk`); attached = true;
       const cols = (schema, t) => db.prepare(`PRAGMA ${schema}.table_info(${t})`).all().map((c) => c.name);
-      const order = ['categories', 'items', 'counters', 'bills', 'bill_items', 'payments', 'payment_links', 'webhook_events', 'settings'];
+      const order = ['categories', 'items', 'counters', 'bills', 'bill_items', 'payments', 'payment_links', 'bill_edits', 'insta_follows', 'webhook_events', 'settings'];
       const have = order.filter((t) => cols('bk', t).length);
       const counts = {};
       tx(() => {

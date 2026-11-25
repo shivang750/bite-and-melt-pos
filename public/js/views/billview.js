@@ -3,7 +3,7 @@ import { inr, fmtDateTime, normalizeIndianMobile } from '../calc.js';
 import { buildReceipt, needsQr, upiPayload, ORDER_LABEL, PAY_LABEL } from '../receipt.js';
 import { qrSvg } from '../qr.js';
 import { LOGO_COLOR, svgDataUrl } from '../logo.js';
-import { state } from '../store.js';
+import { state, ls } from '../store.js';
 import { post } from '../api.js';
 import { printBill } from '../printer.js';
 import { openWhatsApp, sharePdf, prepareReceiptImage, shareReceiptImage, uploadBillLink, openWhatsAppLink } from '../share.js';
@@ -154,9 +154,17 @@ export function showBill(initial, opts = {}) {
     const acts = [btn('Print Bill', { cls: 'primary big', ic: 'print', onclick: () => doPrint(bill) })];
     if (opts.fresh) acts.push(btn('New Bill', { cls: 'sky big', ic: 'plus', onclick: () => { m.close(); opts.onNewBill && opts.onNewBill(); } }));
     body.append(h('div', { class: 'bv-actions' }, acts));
-    if (!unsynced && bill.status !== 'void') body.append(h('div', { class: 'center' }, btn('Cancel this bill…', { cls: 'link danger-text', ic: 'ban', onclick: () => voidBill() })));
+    if (bill.edit_count > 0) body.append(h('div', { class: 'muted small center' }, `Edited ${bill.edit_count} time${bill.edit_count > 1 ? 's' : ''} · last by ${bill.edited_by || '-'} on ${fmtDateTime(bill.edited_at)}`));
+    const paidOnline = bill.payment_link && bill.payment_link.status === 'paid';
+    if (!unsynced && bill.status !== 'void') body.append(h('div', { class: 'center actions-row' },
+      paidOnline ? null : btn('Edit bill', { cls: 'ghost', ic: 'edit', onclick: () => editBill() }),
+      btn('Cancel this bill…', { cls: 'link danger-text', ic: 'ban', onclick: () => voidBill() })));
   };
 
+  function editBill() {
+    ls.set('bm_edit_bill', bill); m.close();
+    if (location.hash === '#/bill') window.dispatchEvent(new Event('bm-edit-bill')); else location.hash = '#/bill';
+  }
   async function markPaid() {
     const ref = h('input', { type: 'text', maxlength: 60, placeholder: 'UPI transaction ID (optional)' });
     const method = h('select', null, ...['cash', 'upi', 'other'].map((k) => h('option', { value: k, selected: k === bill.payment_method }, PAY_LABEL[k])));
@@ -186,6 +194,6 @@ export function showBill(initial, opts = {}) {
 
   render();
   if (opts.fresh) ensureLink();
-  m = modal({ title: opts.fresh ? 'Bill created' : 'Bill details', body, wide: true });
+  m = modal({ title: opts.title || (opts.fresh ? 'Bill created' : 'Bill details'), body, wide: true });
   return m;
 }

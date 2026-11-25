@@ -83,6 +83,7 @@ export function buildReceipt(bill, s, cols = 32) {
   text(lr('Subtotal', plain(bill.subtotal), cols));
   if (bill.item_discount > 0) text(lr('Item discounts', '-' + plain(bill.item_discount), cols));
   if (bill.bill_discount > 0) text(lr('Bill discount', '-' + plain(bill.bill_discount), cols));
+  if (bill.insta_handle) wrap('Instagram offer: @' + bill.insta_handle, cols).forEach((x) => text(x));
   if (bill.tax_total > 0) text(lr(`GST ${bill.gst_rate}%${bill.gst_mode === 'inclusive' ? ' (incl.)' : ''}`, plain(bill.tax_total), cols));
   if (bill.round_off) text(lr('Round off', (bill.round_off > 0 ? '+' : '') + plain(bill.round_off), cols));
   dbl();
